@@ -40,7 +40,6 @@ class YtDlpService {
       '--dump-single-json',
       '--no-playlist',
       '--no-warnings',
-      '--no-call-home',
     ];
     final fullArgs = [...args, url];
 
@@ -92,7 +91,6 @@ class YtDlpService {
       '--newline',
       '--no-playlist',
       '--no-warnings',
-      '--no-call-home',
       '-f', format.id,
       // Always remux problematic codecs into mp4 so the output file actually
       // plays in OS-default players (Linux Files / macOS Finder Quick Look).

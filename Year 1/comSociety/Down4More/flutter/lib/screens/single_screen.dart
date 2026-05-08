@@ -170,8 +170,6 @@ class _SingleScreenState extends State<SingleScreen> {
                     onRetry: _onRetry,
                     onReset: _onReset,
                   ),
-                  if (progress.phase == DownloadPhase.error && metadata == null)
-                    _ErrorBanner(message: progress.errorMessage ?? ''),
                 ],
               ),
             ),
@@ -257,35 +255,6 @@ class _UrlInputRow extends StatelessWidget {
           label: Text(isFetching ? 'Fetching…' : 'Fetch'),
         ),
       ],
-    );
-  }
-}
-
-class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({required this.message});
-  final String message;
-
-  @override
-  Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    return Card(
-      color: scheme.errorContainer,
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Icon(Icons.error_outline, color: scheme.onErrorContainer),
-            const SizedBox(width: 12),
-            Expanded(
-              child: SelectableText(
-                message,
-                style: TextStyle(color: scheme.onErrorContainer),
-              ),
-            ),
-          ],
-        ),
-      ),
     );
   }
 }
