@@ -1,0 +1,2391 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Down4More — Video Downloader</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet" />
+<style>
+:root {
+  --bg: #0a0a0a;
+  --surface: #111111;
+  --surface2: #1a1a1a;
+  --surface3: #202020;
+  --border: #222;
+  --border2: #2a2a2a;
+  --accent: #ff3c3c;
+  --accent2: #ff8c00;
+  --accent-dim: rgba(255,60,60,0.15);
+  --text: #f0f0f0;
+  --muted: #666;
+  --muted2: #444;
+  --success: #22c55e;
+  --warn: #f59e0b;
+  --radius: 12px;
+  --radius-sm: 8px;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.04'/%3E%3C/svg%3E");
+  pointer-events: none;
+  z-index: 999;
+  opacity: 0.4;
+}
+
+/* ── Header ── */
+header {
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.logo-icon {
+  width: 38px; height: 38px;
+  background: var(--accent);
+  border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.logo-icon svg { width: 20px; height: 20px; fill: white; }
+
+.logo-text {
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 30px;
+  letter-spacing: 2px;
+  line-height: 1;
+}
+.logo-text span { color: var(--accent); }
+
+.server-badge {
+  margin-left: auto;
+  display: flex; align-items: center; gap: 7px;
+  font-size: 12px; color: var(--muted);
+  font-family: 'DM Mono', monospace;
+  background: var(--surface2);
+  padding: 5px 11px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+}
+.dot { width: 7px; height: 7px; border-radius: 50%; background: #444; transition: background .3s; }
+.dot.on  { background: var(--success); box-shadow: 0 0 6px var(--success); }
+.dot.err { background: var(--accent);  box-shadow: 0 0 6px var(--accent); }
+
+/* ── Main layout ── */
+main { max-width: 720px; margin: 0 auto; padding: 28px 20px 80px; }
+
+/* ── Banner ── */
+.banner {
+  background: linear-gradient(135deg,#1a0a0a,#1a0d00);
+  border: 1px solid #2a1a1a;
+  border-radius: var(--radius);
+  padding: 13px 17px;
+  font-size: 13px; color: #ff8c6a;
+  margin-bottom: 24px; display: none;
+}
+.banner.show { display: block; }
+.banner strong { color: var(--accent2); }
+
+/* ── Tabs ── */
+.tabs {
+  display: flex; gap: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 5px;
+  margin-bottom: 20px;
+}
+.tab-btn {
+  flex: 1; padding: 9px 12px;
+  background: transparent; border: none;
+  border-radius: var(--radius-sm);
+  color: var(--muted);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px; font-weight: 600;
+  cursor: pointer; transition: all .2s;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+}
+.tab-btn.active { background: var(--surface2); color: var(--text); }
+.tab-btn:hover:not(.active) { color: var(--text); }
+
+/* ── Card ── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 22px;
+  margin-bottom: 14px;
+  animation: slideUp .3s ease both;
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.card-label {
+  font-size: 10px; font-weight: 600;
+  letter-spacing: 2px; text-transform: uppercase;
+  color: var(--muted); margin-bottom: 14px;
+}
+
+/* ── Inputs ── */
+.url-row { display: flex; gap: 8px; }
+
+input[type="text"], input[type="url"] {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  font-size: 13px; outline: none;
+  transition: border-color .2s;
+  width: 100%;
+}
+input:focus { border-color: var(--accent); }
+input::placeholder { color: var(--muted); }
+
+select {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 11px 14px;
+  color: var(--text);
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px; outline: none; cursor: pointer;
+  transition: border-color .2s;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  padding-right: 32px;
+  width: 100%;
+}
+select:focus { border-color: var(--accent); }
+select option { background: #1a1a1a; }
+
+/* ── Buttons ── */
+.btn {
+  padding: 11px 18px;
+  border-radius: var(--radius-sm);
+  border: none; cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  font-weight: 600; font-size: 13px;
+  transition: all .15s;
+  display: inline-flex; align-items: center; gap: 6px;
+  white-space: nowrap;
+}
+.btn-primary { background: var(--accent); color: white; }
+.btn-primary:hover { background: #e03030; transform: translateY(-1px); }
+.btn-ghost {
+  background: var(--surface2); color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover { border-color: #444; background: #222; }
+.btn-success { background: var(--success); color: white; }
+.btn-success:hover { background: #16a34a; transform: translateY(-1px); }
+.btn:disabled { opacity: .4; cursor: not-allowed; transform: none !important; }
+
+/* ── Spinner ── */
+.spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,.25);
+  border-top-color: white;
+  border-radius: 50%;
+  display: inline-block;
+  animation: spin .6s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Video info card ── */
+.thumb-row { display: flex; gap: 14px; align-items: flex-start; }
+.thumb {
+  width: 114px; height: 64px;
+  object-fit: cover; border-radius: 6px;
+  flex-shrink: 0; background: var(--surface2);
+}
+.video-meta { flex: 1; min-width: 0; }
+.video-title {
+  font-size: 14px; font-weight: 600; line-height: 1.4;
+  margin-bottom: 3px;
+  overflow: hidden; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+}
+.video-sub { font-size: 11px; color: var(--muted); }
+
+/* ── Opts grid ── */
+.opts-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
+.seg-grid  { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.field-group { display: flex; flex-direction: column; gap: 5px; }
+.field-label { font-size: 11px; font-weight: 500; color: var(--muted); letter-spacing: .5px; }
+
+/* ── MP3 toggle ── */
+.toggle-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 12px 14px;
+  background: var(--surface2);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+.toggle-label { flex: 1; }
+.toggle-label strong { font-size: 14px; display: block; }
+.toggle-label span { font-size: 11px; color: var(--muted); }
+.switch {
+  width: 38px; height: 20px;
+  background: var(--surface3);
+  border-radius: 10px;
+  border: 1px solid var(--border2);
+  position: relative; flex-shrink: 0;
+  transition: background .2s;
+}
+.switch::after {
+  content: '';
+  position: absolute; left: 2px; top: 50%;
+  transform: translateY(-50%);
+  width: 14px; height: 14px;
+  background: var(--muted2);
+  border-radius: 50%;
+  transition: left .2s, background .2s;
+}
+.toggle-row.active .switch { background: var(--accent-dim); border-color: var(--accent); }
+.toggle-row.active .switch::after { left: 20px; background: var(--accent); }
+
+/* ── Time hint ── */
+.time-hint { font-size: 11px; color: var(--muted); margin-top: 7px; }
+
+/* ── Download button ── */
+.dl-btn-wrap { margin-top: 20px; }
+.btn-download {
+  width: 100%; padding: 14px;
+  background: var(--accent); color: white; border: none;
+  border-radius: var(--radius-sm);
+  font-family: 'Bebas Neue', sans-serif;
+  font-size: 18px; letter-spacing: 2px;
+  cursor: pointer; transition: all .15s;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+.btn-download:hover { background: #e03030; transform: translateY(-1px); }
+.btn-download:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+/* ── Progress ── */
+#progress-section, #result-section,
+#playlist-section, #queue-section { display: none; }
+
+.progress-label { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 13px; }
+.progress-bar-bg { background: var(--surface2); border-radius: 6px; height: 6px; overflow: hidden; }
+.progress-bar { height: 100%; background: var(--accent); border-radius: 6px; transition: width .4s; width: 0%; }
+
+/* ── Result ── */
+.result-box {
+  background: var(--surface);
+  border: 1px solid #1a3a1a;
+  border-radius: var(--radius);
+  padding: 28px;
+  text-align: center;
+  animation: slideUp .3s ease both;
+}
+.result-icon { font-size: 36px; display: block; margin-bottom: 10px; }
+.result-title { font-size: 18px; font-weight: 600; margin-bottom: 6px; }
+.result-path {
+  font-family: 'DM Mono', monospace;
+  font-size: 11px; color: var(--muted);
+  margin-top: 10px; word-break: break-all;
+  background: var(--surface2);
+  padding: 8px 12px; border-radius: 6px;
+}
+
+/* ── Playlist UI ── */
+.pl-header {
+  display: flex; align-items: center; gap: 10px;
+  margin-bottom: 16px;
+}
+.pl-title { font-size: 15px; font-weight: 600; flex: 1; }
+.pl-count { font-size: 12px; color: var(--muted); font-family: 'DM Mono', monospace; }
+
+.pl-actions {
+  display: flex; gap: 8px;
+  margin-bottom: 14px; flex-wrap: wrap;
+}
+
+.pl-global-opts {
+  display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px;
+  margin-bottom: 14px;
+}
+
+.pl-list {
+  display: flex; flex-direction: column; gap: 6px;
+  max-height: 420px; overflow-y: auto;
+  padding-right: 4px;
+}
+.pl-list::-webkit-scrollbar { width: 4px; }
+.pl-list::-webkit-scrollbar-track { background: var(--surface2); border-radius: 2px; }
+.pl-list::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.pl-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  transition: border-color .15s;
+  cursor: pointer;
+}
+.pl-item:hover { border-color: var(--border2); }
+.pl-item.selected { border-color: var(--accent); background: var(--accent-dim); }
+
+.pl-check {
+  width: 18px; height: 18px; flex-shrink: 0;
+  border: 2px solid var(--muted2);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  transition: all .15s;
+}
+.pl-item.selected .pl-check {
+  background: var(--accent); border-color: var(--accent);
+}
+.pl-check svg { width: 11px; height: 11px; fill: white; display: none; }
+.pl-item.selected .pl-check svg { display: block; }
+
+.pl-thumb {
+  width: 72px; height: 40px;
+  object-fit: cover; border-radius: 4px;
+  flex-shrink: 0; background: var(--surface3);
+}
+.pl-item-meta { flex: 1; min-width: 0; }
+.pl-item-title {
+  font-size: 13px; font-weight: 500; line-height: 1.3;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.pl-item-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* ── Queue section ── */
+.queue-list { display: flex; flex-direction: column; gap: 8px; }
+
+.queue-item {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  animation: slideUp .2s ease both;
+}
+.qi-header { display: flex; align-items: center; gap: 8px; margin-bottom: 7px; }
+.qi-title { font-size: 13px; font-weight: 500; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qi-status {
+  font-size: 11px; font-family: 'DM Mono', monospace;
+  padding: 2px 7px; border-radius: 4px;
+  background: var(--surface3); color: var(--muted);
+  flex-shrink: 0;
+}
+.qi-status.running { color: var(--accent2); background: rgba(245,158,11,.1); }
+.qi-status.paused  { color: #60a5fa;        background: rgba(96,165,250,.1); }
+.qi-status.done    { color: var(--success);  background: rgba(34,197,94,.1); }
+.qi-status.error   { color: var(--accent);   background: rgba(255,60,60,.1); }
+.qi-status.waiting { color: var(--muted); }
+.qi-bar.paused  { background: #60a5fa; }
+.qi-bar-bg { background: var(--surface3); border-radius: 4px; height: 4px; overflow: hidden; }
+.qi-bar { height: 100%; border-radius: 4px; transition: width .4s; width: 0%; }
+.qi-bar.running { background: var(--accent2); }
+.qi-bar.done    { background: var(--success); }
+.qi-bar.error   { background: var(--accent); }
+.qi-msg { font-size: 11px; color: var(--muted); margin-top: 4px; }
+.qi-footer { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.qi-speed {
+  font-size: 11px; font-family: 'DM Mono', monospace;
+  color: var(--accent2); background: rgba(245,158,11,.08);
+  padding: 1px 6px; border-radius: 4px;
+  display: none;
+}
+.qi-speed.show { display: inline-block; }
+.qi-cancel {
+  margin-left: auto;
+  background: none; border: 1px solid rgba(255,60,60,.35);
+  color: var(--accent); border-radius: 4px;
+  padding: 2px 8px; font-size: 11px; font-family: 'DM Sans', sans-serif;
+  cursor: pointer; transition: all .15s;
+}
+.qi-cancel:hover { background: rgba(255,60,60,.12); }
+.qi-cancel:disabled { opacity: .4; cursor: not-allowed; }
+
+/* optgroup labels in grouped selects */
+select optgroup { color: var(--muted); font-size: 11px; font-style: normal; }
+select option   { color: var(--text); background: var(--surface); }
+
+/* ── Pause / Resume / Retry buttons ── */
+.qi-pause {
+  margin-left: auto;
+  background: none; border: 1px solid rgba(245,158,11,.4);
+  color: var(--accent2); border-radius: 4px;
+  padding: 2px 8px; font-size: 11px; font-family: 'DM Sans', sans-serif;
+  cursor: pointer; transition: all .15s;
+}
+.qi-pause:hover { background: rgba(245,158,11,.12); }
+.qi-retry {
+  background: none; border: 1px solid rgba(34,197,94,.4);
+  color: var(--success); border-radius: 4px;
+  padding: 2px 8px; font-size: 11px; font-family: 'DM Sans', sans-serif;
+  cursor: pointer; transition: all .15s;
+}
+.qi-retry:hover { background: rgba(34,197,94,.12); }
+
+/* ── Single-download control bar ── */
+.dl-controls {
+  display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap;
+}
+
+/* ── Speed badge on single download ── */
+.speed-badge {
+  display: none; align-items: center; gap: 5px;
+  font-size: 12px; font-family: 'DM Mono', monospace;
+  color: var(--accent2);
+  background: rgba(245,158,11,.08);
+  border: 1px solid rgba(245,158,11,.2);
+  padding: 3px 10px; border-radius: 20px;
+}
+.speed-badge.show { display: inline-flex; }
+.speed-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent2); animation: pulse 1s ease-in-out infinite; }
+@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.3} }
+
+/* ── Loading overlay for playlist fetch ── */
+.pl-loading {
+  text-align: center; padding: 40px 20px;
+  color: var(--muted);
+}
+.pl-loading .spinner { width: 24px; height: 24px; border-width: 3px; margin-bottom: 12px; display: block; margin-left: auto; margin-right: auto; }
+
+/* ── Platform pill ── */
+.platform-row {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: 10px; flex-wrap: wrap;
+}
+.platform-pill {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 20px;
+  font-size: 11px; font-weight: 600; letter-spacing: .5px;
+  border: 1px solid var(--border2);
+  color: var(--muted); background: var(--surface2);
+  transition: all .2s;
+}
+.platform-pill.detected { color: white; border-color: transparent; }
+.platform-pill.yt       { background: #ff0000; }
+.platform-pill.ig       { background: linear-gradient(135deg,#833ab4,#fd1d1d,#fcb045); }
+.platform-pill.fb       { background: #1877f2; }
+.platform-pill.tt       { background: #010101; border-color: #333; }
+.platform-pill.tw       { background: #000; border-color: #333; }
+.platform-note {
+  font-size: 11px; color: var(--warn); margin-top: 7px;
+  display: none;
+}
+.platform-note.show { display: block; }
+
+/* ── Supported platforms chips ── */
+.platforms-supported {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-bottom: 20px;
+}
+.sup-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  padding: 5px 11px; border-radius: 20px;
+  font-size: 11px; font-weight: 600;
+  border: 1px solid var(--border2); color: var(--muted);
+  background: var(--surface);
+}
+.sup-chip .chip-dot { width: 6px; height: 6px; border-radius: 50%; }
+
+/* ── Batch textarea ── */
+textarea {
+  width: 100%;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 12px 14px;
+  color: var(--text);
+  font-family: 'DM Mono', monospace;
+  font-size: 12px; outline: none;
+  transition: border-color .2s;
+  resize: vertical;
+  min-height: 140px;
+  line-height: 1.6;
+}
+textarea:focus { border-color: var(--accent); }
+textarea::placeholder { color: var(--muted); }
+
+/* ── File browser ── */
+.file-row {
+  display: flex; align-items: center; gap: 12px;
+  padding: 11px 13px;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 6px;
+  transition: border-color .15s;
+}
+.file-row:hover { border-color: var(--border2); }
+.file-icon {
+  width: 32px; height: 32px; border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; flex-shrink: 0;
+  font-family: 'DM Mono', monospace;
+}
+.file-icon.mp4  { background: rgba(255,60,60,.15); color: var(--accent); }
+.file-icon.mp3  { background: rgba(34,197,94,.15);  color: var(--success); }
+.file-icon.webm { background: rgba(255,140,0,.15);  color: var(--accent2); }
+.file-icon.other{ background: var(--surface3); color: var(--muted); }
+.file-meta { flex: 1; min-width: 0; }
+.file-name {
+  font-size: 13px; font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.file-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.file-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.file-btn {
+  padding: 5px 10px; border-radius: 6px;
+  background: var(--surface3); border: 1px solid var(--border2);
+  color: var(--muted); font-size: 11px; font-weight: 600;
+  cursor: pointer; transition: all .15s;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.file-btn:hover { color: var(--text); border-color: #444; }
+.file-btn.danger:hover { color: var(--accent); border-color: var(--accent); }
+.files-empty { text-align: center; padding: 40px 20px; color: var(--muted); font-size: 13px; }
+
+/* ── Sort buttons ── */
+.files-sort-btn {
+  padding: 5px 11px; border-radius: 20px;
+  background: var(--surface2); border: 1px solid var(--border);
+  color: var(--muted); font-size: 11px; font-weight: 600;
+  cursor: pointer; transition: all .15s; font-family: 'DM Sans', sans-serif;
+}
+.files-sort-btn:hover { color: var(--text); }
+.files-sort-btn.active { background: var(--surface3); border-color: var(--border2); color: var(--text); }
+
+/* ── Clipboard toast ── */
+#clipboard-toast {
+  position: fixed; bottom: 24px; left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--surface2); border: 1px solid var(--border2);
+  border-radius: var(--radius); padding: 12px 18px;
+  display: flex; align-items: center; gap: 12px;
+  font-size: 13px; z-index: 1000;
+  opacity: 0; pointer-events: none;
+  transition: opacity .25s, transform .25s;
+  box-shadow: 0 8px 32px rgba(0,0,0,.5);
+  max-width: calc(100vw - 40px);
+}
+#clipboard-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); pointer-events: auto; }
+.toast-url {
+  font-family: 'DM Mono', monospace; font-size: 11px;
+  color: var(--muted); max-width: 180px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.toast-btns { display: flex; gap: 6px; }
+
+@media (max-width: 520px) {
+  .opts-grid, .seg-grid, .pl-global-opts { grid-template-columns: 1fr; }
+  .url-row { flex-direction: column; }
+  .thumb-row { flex-direction: column; }
+  .thumb { width: 100%; height: auto; }
+  .pl-global-opts { grid-template-columns: 1fr 1fr; }
+  .file-actions { flex-direction: column; }
+}
+</style>
+</head>
+<body>
+
+<!-- Clipboard toast -->
+<div id="clipboard-toast">
+  <div>
+    <div style="font-weight:600;margin-bottom:2px">Video URL detected in clipboard</div>
+    <div class="toast-url" id="toast-url-preview"></div>
+  </div>
+  <div class="toast-btns">
+    <button class="btn btn-primary" style="padding:6px 12px;font-size:12px" onclick="useClipboardUrl()">Use it</button>
+    <button class="btn btn-ghost"   style="padding:6px 12px;font-size:12px" onclick="dismissToast()">Dismiss</button>
+  </div>
+</div>
+
+<header>
+  <div class="logo-icon">
+    <svg viewBox="0 0 24 24"><path d="M10 8.64L15.27 12 10 15.36V8.64zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg>
+  </div>
+  <div class="logo-text">Down<span>4More</span></div>
+  <div class="server-badge">
+    <div class="dot" id="status-dot"></div>
+    <span id="status-text">checking...</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- Missing-deps banner -->
+  <div class="banner" id="server-banner">
+    <strong>⚠ Server or tools not ready.</strong> Make sure <code>server.py</code> is running and <code>yt-dlp</code> + <code>ffmpeg</code> are installed.
+  </div>
+
+  <!-- Supported platforms -->
+  <div class="platforms-supported">
+    <div class="sup-chip"><span class="chip-dot" style="background:#ff0000"></span>YouTube</div>
+    <div class="sup-chip"><span class="chip-dot" style="background:linear-gradient(135deg,#833ab4,#fd1d1d)"></span>Instagram</div>
+    <div class="sup-chip"><span class="chip-dot" style="background:#1877f2"></span>Facebook</div>
+    <div class="sup-chip"><span class="chip-dot" style="background:#fff;border:1px solid #333"></span>X / Twitter</div>
+    <div class="sup-chip"><span class="chip-dot" style="background:#fe2c55"></span>TikTok</div>
+  </div>
+
+  <!-- Mode tabs -->
+  <div class="tabs">
+    <button class="tab-btn active" id="tab-single-btn" onclick="switchMode('single')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M10 8.64L15.27 12 10 15.36V8.64zM12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2z"/></svg>
+      Single
+    </button>
+    <button class="tab-btn" id="tab-playlist-btn" onclick="switchMode('playlist')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm0-8h2V7H3v2zm4 4h14v-2H7v2zm0 4h14v-2H7v2zM7 7v2h14V7H7z"/></svg>
+      Playlist
+    </button>
+    <button class="tab-btn" id="tab-batch-btn" onclick="switchMode('batch')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M4 6h16v2H4zm0 5h16v2H4zm0 5h16v2H4z"/></svg>
+      Batch
+    </button>
+    <button class="tab-btn" id="tab-files-btn" onclick="switchMode('files')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+      My Files
+    </button>
+    <button class="tab-btn" id="tab-settings-btn" onclick="switchMode('settings')">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.49.49 0 00-.59-.22l-2.39.96a6.97 6.97 0 00-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.37 1.04.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.57 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/></svg>
+      Settings
+    </button>
+  </div>
+
+  <!-- ══════════════ SINGLE VIDEO MODE ══════════════ -->
+  <div id="mode-single">
+
+    <!-- URL input -->
+    <div class="card">
+      <div class="card-label">Video URL</div>
+      <div class="url-row">
+        <input type="url" id="url-input" placeholder="Paste a YouTube, Instagram, Facebook, X, or TikTok URL…" oninput="detectPlatform(this.value,'single')" />
+        <button class="btn btn-primary" id="fetch-btn" onclick="fetchInfo()">
+          <span id="fetch-label">Fetch</span>
+        </button>
+      </div>
+      <div class="platform-row">
+        <span id="platform-pill" class="platform-pill">No URL detected</span>
+      </div>
+      <div class="platform-note" id="platform-note">
+        ℹ️ Quality selection may not be available for this platform — best quality will be used automatically.
+      </div>
+    </div>
+
+    <!-- Video info + options -->
+    <div id="video-info" style="display:none">
+      <div class="card">
+        <div class="card-label">Video</div>
+        <div class="thumb-row">
+          <img class="thumb" id="thumb" src="" alt="" />
+          <div class="video-meta">
+            <div class="video-title" id="video-title"></div>
+            <div class="video-sub" id="video-sub"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-label">Options</div>
+
+        <!-- Format + Quality + Filename -->
+        <div class="opts-grid">
+          <div class="field-group">
+            <div class="field-label">Format</div>
+            <select id="format-select" onchange="onFormatChange()">
+              <optgroup label="📹 Video">
+                <option value="mp4" selected>MP4</option>
+                <option value="mkv">MKV</option>
+                <option value="webm">WebM</option>
+              </optgroup>
+              <optgroup label="🎵 Audio">
+                <option value="mp3">MP3</option>
+                <option value="m4a">M4A</option>
+                <option value="flac">FLAC</option>
+                <option value="ogg">OGG</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="field-group" id="quality-group">
+            <div class="field-label">Quality</div>
+            <select id="quality-select">
+              <option value="best">Best available</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <div class="field-label">Output filename</div>
+            <input type="text" id="output-name" placeholder="my-clip" />
+          </div>
+        </div>
+
+        <div style="height:16px"></div>
+
+        <!-- Segment -->
+        <div class="card-label">Segment (optional)</div>
+        <div class="seg-grid">
+          <div class="field-group">
+            <div class="field-label">Start time</div>
+            <input type="text" id="start-time" placeholder="e.g. 01:20 or 80" />
+          </div>
+          <div class="field-group">
+            <div class="field-label">End time</div>
+            <input type="text" id="end-time" placeholder="e.g. 03:45 or 225" />
+          </div>
+        </div>
+        <div class="time-hint" id="duration-hint"></div>
+
+        <div class="dl-btn-wrap">
+          <button class="btn-download" id="dl-btn" onclick="startDownload()">
+            ⬇ DOWNLOAD
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div id="progress-section">
+      <div class="card">
+        <div class="card-label" id="progress-section-label">Downloading</div>
+        <div class="progress-label">
+          <span id="progress-msg">Preparing...</span>
+          <span id="progress-pct"></span>
+        </div>
+        <div class="progress-bar-bg">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <div style="margin-top:12px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span class="speed-badge" id="speed-badge">
+            <span class="speed-dot"></span>
+            <span id="speed-value">— KB/s</span>
+          </span>
+          <span id="eta-label" style="font-size:11px;color:var(--muted);font-family:'DM Mono',monospace;display:none"></span>
+          <div style="flex:1"></div>
+          <button class="btn btn-ghost" id="pause-btn" onclick="togglePause()" style="font-size:12px;padding:7px 16px;display:none">
+            ⏸ Pause
+          </button>
+          <button class="btn btn-ghost" id="cancel-btn" onclick="cancelDownload()" style="font-size:12px;padding:7px 16px;color:var(--accent);border-color:var(--accent)">
+            ✕ Cancel
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Result -->
+    <div id="result-section">
+      <div class="result-box">
+        <span class="result-icon" id="result-icon">✅</span>
+        <div class="result-title" id="result-title">Download Complete</div>
+        <div style="font-size:14px;color:var(--muted)" id="result-subtitle">File saved to your Downloads folder</div>
+        <div class="result-path" id="result-path"></div>
+        <div style="margin-top:16px;display:flex;gap:10px;justify-content:center;flex-wrap:wrap">
+          <button class="btn btn-ghost" id="retry-btn" onclick="retryDownload()" style="display:none;color:var(--success);border-color:var(--success)">↺ Retry</button>
+          <button class="btn btn-ghost" onclick="resetApp()">Download another</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /mode-single -->
+
+
+  <!-- ══════════════ PLAYLIST MODE ══════════════ -->
+  <div id="mode-playlist" style="display:none">
+
+    <!-- URL input -->
+    <div class="card">
+      <div class="card-label">Playlist URL</div>
+      <div class="url-row">
+        <input type="url" id="pl-url-input" placeholder="https://youtube.com/playlist?list=… (YouTube playlists only)" oninput="detectPlatform(this.value,'playlist')" />
+        <button class="btn btn-primary" id="pl-fetch-btn" onclick="fetchPlaylist()">
+          <span id="pl-fetch-label">Load</span>
+        </button>
+      </div>
+      <div class="platform-row">
+        <span id="pl-platform-pill" class="platform-pill">No URL detected</span>
+      </div>
+    </div>
+
+    <!-- Playlist content -->
+    <div id="playlist-section">
+      <div class="card">
+
+        <!-- Global options for all selected -->
+        <div class="card-label">Download Options (applies to all selected)</div>
+        <div class="pl-global-opts">
+          <div class="field-group" id="pl-quality-group">
+            <div class="field-label">Quality</div>
+            <select id="pl-quality" style="width:100%">
+              <option value="best">Best available</option>
+              <option value="1080p">1080p</option>
+              <option value="720p">720p</option>
+              <option value="480p">480p</option>
+              <option value="360p">360p</option>
+            </select>
+          </div>
+          <div class="field-group">
+            <div class="field-label">Format</div>
+            <select id="pl-format" onchange="onFormatChange()">
+              <optgroup label="📹 Video">
+                <option value="mp4" selected>MP4</option>
+                <option value="mkv">MKV</option>
+                <option value="webm">WebM</option>
+              </optgroup>
+              <optgroup label="🎵 Audio">
+                <option value="mp3">MP3</option>
+                <option value="m4a">M4A</option>
+                <option value="flac">FLAC</option>
+                <option value="ogg">OGG</option>
+              </optgroup>
+            </select>
+          </div>
+          <div class="field-group">
+            <div class="field-label">Concurrency</div>
+            <select id="pl-concurrency">
+              <option value="1">1 at a time</option>
+              <option value="2" selected>2 at a time</option>
+              <option value="3">3 at a time</option>
+              <option value="4">4 at a time</option>
+              <option value="5">5 at a time (max)</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Select actions -->
+        <div class="pl-actions">
+          <button class="btn btn-ghost" style="font-size:12px;padding:7px 13px" onclick="selectAll()">Select All</button>
+          <button class="btn btn-ghost" style="font-size:12px;padding:7px 13px" onclick="selectNone()">Deselect All</button>
+          <div style="flex:1"></div>
+          <span class="pl-count" id="pl-sel-count">0 selected</span>
+        </div>
+
+        <!-- Videos list -->
+        <div class="pl-list" id="pl-list"></div>
+
+        <div style="margin-top:16px">
+          <button class="btn-download" id="pl-dl-btn" onclick="startPlaylistDownload()">
+            ⬇ DOWNLOAD SELECTED
+          </button>
+        </div>
+
+      </div>
+    </div>
+
+    <!-- Queue section -->
+    <div id="queue-section">
+      <div class="card">
+        <div class="card-label" id="queue-label">Download Queue</div>
+        <div class="queue-list" id="queue-list"></div>
+        <div style="margin-top:16px;display:flex;gap:10px">
+          <button class="btn btn-ghost" onclick="resetPlaylist()">Back to Playlist</button>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /mode-playlist -->
+
+
+  <!-- ══════════════ BATCH MODE ══════════════ -->
+  <div id="mode-batch" style="display:none">
+    <div class="card">
+      <div class="card-label">Batch URLs — one per line</div>
+      <textarea id="batch-input" placeholder="https://youtube.com/watch?v=...&#10;https://instagram.com/p/...&#10;https://tiktok.com/@user/video/...&#10;(one URL per line, any supported platform)"></textarea>
+      <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span id="batch-url-count" style="font-size:12px;color:var(--muted)">0 URLs detected</span>
+        <button class="btn btn-ghost" style="font-size:12px;padding:6px 12px" onclick="clearBatch()">Clear</button>
+        <button class="btn btn-ghost" style="font-size:12px;padding:6px 12px" onclick="pasteBatch()">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M19 2h-4.18C14.4.84 13.3 0 12 0c-1.3 0-2.4.84-2.82 2H5c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-7 0c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm7 18H5V4h2v3h10V4h2v16z"/></svg>
+          Paste
+        </button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">Download Options</div>
+      <div class="opts-grid">
+        <div class="field-group">
+          <div class="field-label">Format</div>
+          <select id="batch-format" onchange="onFormatChange()">
+            <optgroup label="📹 Video">
+              <option value="mp4" selected>MP4</option>
+              <option value="mkv">MKV</option>
+              <option value="webm">WebM</option>
+            </optgroup>
+            <optgroup label="🎵 Audio">
+              <option value="mp3">MP3</option>
+              <option value="m4a">M4A</option>
+              <option value="flac">FLAC</option>
+              <option value="ogg">OGG</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="field-group" id="batch-quality-group">
+          <div class="field-label">Quality (YouTube only)</div>
+          <select id="batch-quality">
+            <option value="best">Best available</option>
+            <option value="1080p">1080p</option>
+            <option value="720p">720p</option>
+            <option value="480p">480p</option>
+            <option value="360p">360p</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <div class="field-label">Concurrency</div>
+          <select id="batch-concurrency">
+            <option value="1">1 at a time</option>
+            <option value="2" selected>2 at a time</option>
+            <option value="3">3 at a time</option>
+            <option value="4">4 at a time</option>
+            <option value="5">5 at a time (max)</option>
+          </select>
+        </div>
+      </div>
+      <div class="dl-btn-wrap">
+        <button class="btn-download" id="batch-dl-btn" onclick="startBatchDownload()" disabled>
+          ⬇ DOWNLOAD ALL
+        </button>
+      </div>
+    </div>
+
+    <!-- Batch queue -->
+    <div id="batch-queue-section" style="display:none">
+      <div class="card">
+        <div class="card-label" id="batch-queue-label">Batch Queue</div>
+        <div class="queue-list" id="batch-queue-list"></div>
+        <div style="margin-top:16px;display:flex;gap:10px">
+          <button class="btn btn-ghost" onclick="resetBatch()">New Batch</button>
+        </div>
+      </div>
+    </div>
+  </div><!-- /mode-batch -->
+
+
+  <!-- ══════════════ FILES MODE ══════════════ -->
+  <div id="mode-files" style="display:none">
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px">
+        <div style="flex:1">
+          <div class="card-label" style="margin-bottom:4px">Downloaded Files</div>
+          <div style="font-size:12px;color:var(--muted)" id="files-dir-label">Loading...</div>
+        </div>
+        <button class="btn btn-ghost" style="font-size:12px;padding:7px 13px" onclick="openFolder()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+          Open Folder
+        </button>
+        <button class="btn btn-ghost" style="font-size:12px;padding:7px 13px" onclick="refreshFiles()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M17.65 6.35A7.958 7.958 0 0 0 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0 1 12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+          Refresh
+        </button>
+      </div>
+
+      <!-- Search bar -->
+      <div style="margin-bottom:12px">
+        <input type="text" id="files-search" placeholder="Search files…" oninput="filterFiles(this.value)" style="width:100%" />
+      </div>
+
+      <!-- Sort bar -->
+      <div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+        <button class="files-sort-btn active" id="sort-date" onclick="sortFiles('date')">Newest first</button>
+        <button class="files-sort-btn" id="sort-name" onclick="sortFiles('name')">Name A–Z</button>
+        <button class="files-sort-btn" id="sort-size" onclick="sortFiles('size')">Largest first</button>
+      </div>
+
+      <div id="files-list"></div>
+    </div>
+  </div><!-- /mode-files -->
+  <!-- ══════════════ SETTINGS MODE ══════════════ -->
+  <div id="mode-settings" style="display:none">
+
+    <div class="card">
+      <div class="card-label">📁 Download</div>
+
+      <div class="field-group">
+        <div class="field-label">Download folder</div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="text" id="folder-input" placeholder="/home/user/Downloads/Down4More"
+                 style="flex:1;font-size:12px;font-family:'DM Mono',monospace"
+                 onkeydown="if(event.key==='Enter')saveSettings()" />
+        </div>
+      </div>
+
+      <div style="height:10px"></div>
+
+      <div class="toggle-row" id="keep-temp-toggle" onclick="toggleKeepTemp()">
+        <div class="toggle-label">
+          <strong>Keep partial files on cancel</strong>
+          <span>Don't delete incomplete downloads when cancelling</span>
+        </div>
+        <div class="switch"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">🎬 Defaults</div>
+      <div class="opts-grid">
+        <div class="field-group">
+          <div class="field-label">Default format</div>
+          <select id="settings-format">
+            <optgroup label="📹 Video">
+              <option value="mp4" selected>MP4</option>
+              <option value="mkv">MKV</option>
+              <option value="webm">WebM</option>
+            </optgroup>
+            <optgroup label="🎵 Audio">
+              <option value="mp3">MP3</option>
+              <option value="m4a">M4A</option>
+              <option value="flac">FLAC</option>
+              <option value="ogg">OGG</option>
+            </optgroup>
+          </select>
+        </div>
+        <div class="field-group">
+          <div class="field-label">Default quality (YouTube)</div>
+          <select id="settings-quality">
+            <option value="best">Best available</option>
+            <option value="1080p">1080p</option>
+            <option value="720p">720p</option>
+            <option value="480p">480p</option>
+            <option value="360p">360p</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <div class="field-label">Default concurrency</div>
+          <select id="settings-concurrency">
+            <option value="1">1 at a time</option>
+            <option value="2" selected>2 at a time</option>
+            <option value="3">3 at a time</option>
+            <option value="4">4 at a time</option>
+            <option value="5">5 at a time (max)</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">🌐 Network</div>
+      <div class="opts-grid">
+        <div class="field-group">
+          <div class="field-label">Speed limit</div>
+          <input type="text" id="settings-speed" placeholder="e.g. 2M or 500K — blank = unlimited"
+                 style="font-size:13px" />
+          <div style="font-size:11px;color:var(--muted);margin-top:4px">Uses yt-dlp --rate-limit format</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-label">🔁 Auto-retry</div>
+      <div class="opts-grid">
+        <div class="field-group">
+          <div class="field-label">Max retries on failure</div>
+          <select id="settings-retry">
+            <option value="0" selected>Disabled</option>
+            <option value="1">1 retry</option>
+            <option value="2">2 retries</option>
+            <option value="3">3 retries</option>
+            <option value="5">5 retries</option>
+          </select>
+        </div>
+        <div class="field-group">
+          <div class="field-label">Delay between retries (seconds)</div>
+          <input type="number" id="settings-retry-delay" value="5" min="1" max="60"
+                 style="font-size:13px" />
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:10px;align-items:center;margin-top:4px">
+      <button class="btn-download" onclick="saveSettings()" style="flex:1;max-width:200px">
+        💾 Save Settings
+      </button>
+      <span id="settings-msg" style="font-size:13px;color:var(--muted)"></span>
+      <div style="flex:1"></div>
+      <button class="btn btn-ghost" style="font-size:12px;padding:7px 13px;color:var(--accent)"
+              onclick="resetSettings()">Reset to defaults</button>
+    </div>
+
+  </div><!-- /mode-settings -->
+
+</main>
+
+<script>
+const API = 'http://localhost:8765';
+// audio format list (mirrors server AUDIO_FORMATS)
+const AUDIO_FORMATS = new Set(["mp3","m4a","flac","ogg","wav","opus"]);
+function isAudioFormat(fmt) { return AUDIO_FORMATS.has((fmt||"").toLowerCase()); }
+
+function onFormatChange() {
+  // Determine which format changed and grey out the matching quality group
+  const fmtSingle = document.getElementById('format-select')?.value || 'mp4';
+  const fmtPl     = document.getElementById('pl-format')?.value    || 'mp4';
+  const fmtBatch  = document.getElementById('batch-format')?.value || 'mp4';
+
+  _toggleQuality('quality-group',       isAudioFormat(fmtSingle));
+  _toggleQuality('pl-quality-group',    isAudioFormat(fmtPl));
+  _toggleQuality('batch-quality-group', isAudioFormat(fmtBatch));
+}
+
+function _toggleQuality(id, disable) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.opacity       = disable ? '0.3' : '1';
+  el.style.pointerEvents = disable ? 'none' : 'auto';
+}
+
+async function setFolder() {
+  // Legacy — now proxies through saveSettings
+  await saveSettings();
+}
+
+let _keepTemp = false;
+
+function toggleKeepTemp() {
+  _keepTemp = !_keepTemp;
+  document.getElementById('keep-temp-toggle').classList.toggle('active', _keepTemp);
+}
+
+function loadSettingsFromServer() {
+  fetch(`${API}/get_settings`)
+    .then(r => r.json())
+    .then(d => { if (d.ok) _applySettingsToUI(d.settings, false); })
+    .catch(() => {});
+}
+
+function loadSettingsUI() {
+  fetch(`${API}/get_settings`)
+    .then(r => r.json())
+    .then(d => { if (d.ok) _applySettingsToUI(d.settings, false); })
+    .catch(() => {});
+}
+
+let _defaultsApplied = false;
+
+function _applySettingsToUI(st, applyDefaults) {
+  // Always sync the Settings panel fields
+  const fi = document.getElementById('folder-input');
+  if (fi && st.download_dir) fi.value = st.download_dir;
+
+  _setSelectVal('settings-format',      st.default_format      || 'mp4');
+  _setSelectVal('settings-quality',     st.default_quality     || 'best');
+  _setSelectVal('settings-concurrency', String(st.default_concurrency || 2));
+  _setSelectVal('settings-retry',       String(st.auto_retry   || 0));
+
+  const sd = document.getElementById('settings-speed');
+  if (sd) sd.value = st.speed_limit || '';
+
+  const rd = document.getElementById('settings-retry-delay');
+  if (rd) rd.value = st.retry_delay != null ? st.retry_delay : 5;
+
+  _keepTemp = !!st.keep_temp_on_cancel;
+  const kt = document.getElementById('keep-temp-toggle');
+  if (kt) kt.classList.toggle('active', _keepTemp);
+
+  // Only push defaults to mode selects on first load or explicit save — never on periodic poll
+  if (applyDefaults || !_defaultsApplied) {
+    _setSelectVal('format-select',     st.default_format  || 'mp4');
+    _setSelectVal('pl-format',         st.default_format  || 'mp4');
+    _setSelectVal('batch-format',      st.default_format  || 'mp4');
+    _setSelectVal('quality-select',    st.default_quality || 'best');
+    _setSelectVal('pl-quality',        st.default_quality || 'best');
+    _setSelectVal('batch-quality',     st.default_quality || 'best');
+    _setSelectVal('pl-concurrency',    String(st.default_concurrency || 2));
+    _setSelectVal('batch-concurrency', String(st.default_concurrency || 2));
+    _defaultsApplied = true;
+    onFormatChange();
+  }
+}
+
+function _setSelectVal(id, val) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  for (const opt of el.options) { if (opt.value === val) { opt.selected = true; break; } }
+}
+
+async function saveSettings() {
+  const folder  = (document.getElementById('folder-input')?.value || '').trim();
+  const fmt     = document.getElementById('settings-format')?.value     || 'mp4';
+  const quality = document.getElementById('settings-quality')?.value    || 'best';
+  const conc    = document.getElementById('settings-concurrency')?.value || '2';
+  const speed   = (document.getElementById('settings-speed')?.value     || '').trim();
+  const retry   = document.getElementById('settings-retry')?.value      || '0';
+  const retryD  = document.getElementById('settings-retry-delay')?.value || '5';
+  const msg     = document.getElementById('settings-msg');
+
+  if (msg) { msg.textContent = 'Saving…'; msg.style.color = 'var(--muted)'; }
+  try {
+    const r = await fetch(`${API}/save_settings`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        download_dir: folder, default_format: fmt, default_quality: quality,
+        default_concurrency: parseInt(conc), speed_limit: speed,
+        auto_retry: parseInt(retry), retry_delay: parseFloat(retryD),
+        keep_temp_on_cancel: _keepTemp
+      })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      _applySettingsToUI(d.settings, true);
+      if (msg) { msg.textContent = '✅ Saved'; msg.style.color = 'var(--success)'; }
+      setTimeout(() => { if (msg) msg.textContent = ''; }, 2500);
+    } else {
+      if (msg) { msg.textContent = '❌ ' + d.error; msg.style.color = 'var(--accent)'; }
+    }
+  } catch(e) {
+    if (msg) { msg.textContent = '❌ ' + e.message; msg.style.color = 'var(--accent)'; }
+  }
+}
+
+async function resetSettings() {
+  if (!confirm('Reset all settings to defaults?')) return;
+  try {
+    const r = await fetch(`${API}/save_settings`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({
+        download_dir: '', default_format: 'mp4', default_quality: 'best',
+        default_concurrency: 2, speed_limit: '', auto_retry: 0,
+        retry_delay: 5, keep_temp_on_cancel: false
+      })
+    });
+    const d = await r.json();
+    if (d.ok) { _applySettingsToUI(d.settings, true); }
+  } catch {}
+}
+let videoDuration = 0;
+let currentMode = 'single';
+
+// ── Platform detection ───────────────────────────────
+function getPlatform(url) {
+  if (!url) return null;
+  if (/youtube\.com|youtu\.be/i.test(url))   return { key: 'yt', label: '▶ YouTube',   cls: 'yt' };
+  if (/instagram\.com/i.test(url))            return { key: 'ig', label: '◈ Instagram', cls: 'ig' };
+  if (/facebook\.com|fb\.watch/i.test(url))  return { key: 'fb', label: 'ƒ Facebook',  cls: 'fb' };
+  if (/tiktok\.com/i.test(url))              return { key: 'tt', label: '♪ TikTok',    cls: 'tt' };
+  if (/twitter\.com|x\.com/i.test(url))      return { key: 'tw', label: '✕ X / Twitter', cls: 'tw' };
+  return { key: 'other', label: '🌐 Other', cls: '' };
+}
+
+function detectPlatform(url, mode) {
+  const p = getPlatform(url.trim());
+  const pillId = mode === 'playlist' ? 'pl-platform-pill' : 'platform-pill';
+  const pill = document.getElementById(pillId);
+  const note = document.getElementById('platform-note');
+  if (!p || !url.trim()) {
+    pill.className = 'platform-pill';
+    pill.textContent = 'No URL detected';
+    if (note) note.classList.remove('show');
+    return;
+  }
+  pill.className = `platform-pill detected ${p.cls}`;
+  pill.textContent = p.label;
+  // Show note for non-YouTube platforms in single mode
+  if (note) {
+    const nonYT = p.key !== 'yt' && p.key !== null;
+    note.classList.toggle('show', nonYT);
+  }
+}
+
+
+// ── Server status ────────────────────────────────────
+async function checkServer() {
+  try {
+    const r = await fetch(`${API}/status`);
+    const d = await r.json();
+    const dot = document.getElementById('status-dot');
+    const txt = document.getElementById('status-text');
+    if (d.ok) {
+      dot.className = 'dot on';
+      txt.textContent = 'server running';
+      document.getElementById('server-banner').classList.remove('show');
+      loadSettingsFromServer();
+    } else {
+      dot.className = 'dot err';
+      txt.textContent = 'missing: ' + d.missing.join(', ');
+      document.getElementById('server-banner').classList.add('show');
+    }
+  } catch {
+    document.getElementById('status-dot').className = 'dot err';
+    document.getElementById('status-text').textContent = 'not running';
+    document.getElementById('server-banner').classList.add('show');
+  }
+}
+
+// ── Mode switch ──────────────────────────────────────
+function switchMode(mode) {
+  currentMode = mode;
+  document.getElementById('mode-single').style.display   = mode === 'single'   ? '' : 'none';
+  document.getElementById('mode-playlist').style.display = mode === 'playlist' ? '' : 'none';
+  document.getElementById('mode-batch').style.display    = mode === 'batch'    ? '' : 'none';
+  document.getElementById('mode-files').style.display    = mode === 'files'    ? '' : 'none';
+  document.getElementById('mode-settings').style.display = mode === 'settings' ? '' : 'none';
+  ['single','playlist','batch','files','settings'].forEach(m => {
+    document.getElementById(`tab-${m}-btn`).classList.toggle('active', m === mode);
+  });
+  if (mode === 'files') refreshFiles();
+  if (mode === 'settings') loadSettingsUI();
+}
+
+// ══════════════════════════════════════════════════════
+//  CLIPBOARD AUTO-PASTE
+// ══════════════════════════════════════════════════════
+let lastClipboardUrl = '';
+let toastTimeout = null;
+
+function isVideoUrl(url) {
+  return /^https?:\/\/.*(youtube\.com|youtu\.be|instagram\.com|facebook\.com|fb\.watch|tiktok\.com|twitter\.com|x\.com)/i.test(url);
+}
+
+async function checkClipboard() {
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (text === lastClipboardUrl) return;
+    if (!isVideoUrl(text)) return;
+    lastClipboardUrl = text;
+    // Don't show if it's already in the current input
+    const activeInput = currentMode === 'playlist' ? 'pl-url-input' : 'url-input';
+    if (document.getElementById(activeInput).value.trim() === text) return;
+    showToast(text);
+  } catch {}
+}
+
+function showToast(url) {
+  document.getElementById('toast-url-preview').textContent = url;
+  document.getElementById('clipboard-toast').classList.add('show');
+  clearTimeout(toastTimeout);
+  toastTimeout = setTimeout(dismissToast, 8000);
+}
+
+function dismissToast() {
+  document.getElementById('clipboard-toast').classList.remove('show');
+  clearTimeout(toastTimeout);
+}
+
+function useClipboardUrl() {
+  const url = lastClipboardUrl;
+  dismissToast();
+  if (currentMode === 'batch') {
+    const ta = document.getElementById('batch-input');
+    ta.value = ta.value ? ta.value.trimEnd() + '\n' + url : url;
+    updateBatchCount();
+  } else if (currentMode === 'playlist') {
+    document.getElementById('pl-url-input').value = url;
+    detectPlatform(url, 'playlist');
+  } else {
+    switchMode('single');
+    document.getElementById('url-input').value = url;
+    detectPlatform(url, 'single');
+    fetchInfo();
+  }
+}
+
+// Check clipboard on window focus
+window.addEventListener('focus', checkClipboard);
+// Also check once on load after a short delay (user may have copied before opening)
+setTimeout(checkClipboard, 1500);
+
+// ══════════════════════════════════════════════════════
+//  BATCH DOWNLOAD
+// ══════════════════════════════════════════════════════
+let batchQueueItems = [];
+let batchActiveCount = 0;
+let batchPointer = 0;
+let batchInterval = null;
+
+function parseBatchUrls() {
+  const lines = document.getElementById('batch-input').value.split('\n');
+  return lines.map(l => l.trim()).filter(l => l.startsWith('http'));
+}
+
+function updateBatchCount() {
+  const urls = parseBatchUrls();
+  const count = urls.length;
+  document.getElementById('batch-url-count').textContent =
+    count === 0 ? '0 URLs detected' : `${count} URL${count !== 1 ? 's' : ''} detected`;
+  document.getElementById('batch-dl-btn').disabled = count === 0;
+}
+
+function clearBatch() {
+  document.getElementById('batch-input').value = '';
+  updateBatchCount();
+}
+
+async function pasteBatch() {
+  try {
+    const text = await navigator.clipboard.readText();
+    const ta = document.getElementById('batch-input');
+    ta.value = ta.value ? ta.value.trimEnd() + '\n' + text.trim() : text.trim();
+    updateBatchCount();
+  } catch { alert('Clipboard access denied — paste manually with Ctrl+V / Cmd+V'); }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const ta = document.getElementById('batch-input');
+  if (ta) ta.addEventListener('input', updateBatchCount);
+});
+
+async function startBatchDownload() {
+  const urls = parseBatchUrls();
+  if (!urls.length) return;
+
+  const outFormat   = document.getElementById('batch-format').value;
+  const quality     = document.getElementById('batch-quality').value;
+  const concurrency = parseInt(document.getElementById('batch-concurrency').value);
+
+  batchQueueItems = urls.map(url => ({
+    url, jobId: null, status: 'waiting', pct: 0, msg: 'Waiting...',
+    title: shortenUrl(url)
+  }));
+  batchActiveCount = 0;
+  batchPointer = 0;
+
+  document.getElementById('batch-queue-section').style.display = 'block';
+  document.getElementById('batch-dl-btn').disabled = true;
+  renderBatchQueue();
+
+  function tick() {
+    while (batchActiveCount < concurrency && batchPointer < batchQueueItems.length) {
+      const item = batchQueueItems[batchPointer++];
+      batchActiveCount++;
+      updateBatchLabel();
+      startBatchItem(item, quality, outFormat).finally(() => {
+        batchActiveCount--;
+        tick();
+      });
+    }
+    updateBatchLabel();
+  }
+  tick();
+
+  batchInterval = setInterval(() => {
+    updateBatchLabel();
+    const canStop = batchPointer >= batchQueueItems.length &&
+                    batchQueueItems.every(i => i.status === 'done' || i.status === 'error' || !i.jobId);
+    if (canStop) { clearInterval(batchInterval); batchInterval = null; }
+  }, 1000);
+}
+
+async function startBatchItem(item, quality, outFormat) {
+  item.status = 'running'; item.msg = 'Fetching title...';
+  updateBatchItemEl(item);
+
+  // Fetch real title before downloading so the filename and UI are correct
+  try {
+    const infoR = await fetch(`${API}/info?url=${encodeURIComponent(item.url)}`);
+    const infoD = await infoR.json();
+    if (infoD.ok && infoD.info?.title) {
+      item.title = infoD.info.title;
+      updateBatchItemEl(item);
+    }
+  } catch { /* title fetch failed — use URL as fallback, download still proceeds */ }
+
+  item.msg = 'Starting...';
+  updateBatchItemEl(item);
+
+  try {
+    const outputName = item.title !== shortenUrl(item.url)
+      ? item.title   // real title fetched
+      : 'batch_' + batchQueueItems.indexOf(item); // fallback
+    const r = await fetch(`${API}/download`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: item.url, quality, out_format: outFormat,
+        output_name: outputName, start_time: '', end_time: '' })
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    item.jobId = d.job_id; item.status = 'running';
+    updateBatchItemEl(item);
+    // Block until done — keeps the concurrency slot occupied
+    await waitForJob(item, updateBatchItemEl);
+  } catch(e) {
+    item.status = 'error'; item.msg = e.message; updateBatchItemEl(item);
+  }
+}
+
+function renderBatchQueue() {
+  const list = document.getElementById('batch-queue-list');
+  list.innerHTML = '';
+  batchQueueItems.forEach((item, i) => {
+    const el = document.createElement('div');
+    el.className = 'queue-item'; el.id = `bqi-${i}`;
+    el.innerHTML = batchItemHTML(item);
+    list.appendChild(el);
+  });
+}
+
+function updateBatchItemEl(item) {
+  const i = batchQueueItems.indexOf(item);
+  const el = document.getElementById(`bqi-${i}`);
+  if (el) el.innerHTML = batchItemHTML(item);
+}
+
+function batchItemHTML(item) {
+  const statusLabel = { waiting:'Waiting', running:'Downloading', paused:'Paused', cancelling:'Cancelling', done:'Done', error:'Error' }[item.status] || item.status;
+  const showCancel = item.jobId && (item.status === 'running' || item.status === 'waiting' || item.status === 'paused');
+  const showPause  = item.jobId && item.status === 'running';
+  const showResume = item.jobId && item.status === 'paused';
+  const showRetry  = item.status === 'error' && item.jobId;
+  const idx = batchQueueItems.indexOf(item);
+  const showSpeed = item.status === 'running' && item.speedBps > 0;
+  return `
+    <div class="qi-header">
+      <div class="qi-title" title="${esc(item.url)}">${esc(item.title)}</div>
+      <div class="qi-status ${item.status}">${statusLabel}</div>
+    </div>
+    <div class="qi-bar-bg"><div class="qi-bar ${item.status}" style="width:${item.pct}%"></div></div>
+    <div class="qi-footer">
+      <div class="qi-msg">${esc(item.msg || '')}</div>
+      ${showSpeed ? `<span class="qi-speed show">⚡ ${fmtSpeed(item.speedBps)}</span>` : ''}
+      ${showPause  ? `<button class="qi-pause" onclick="pauseQueueItem(${idx}, batchQueueItems, updateBatchItemEl)">⏸ Pause</button>` : ''}
+      ${showResume ? `<button class="qi-pause" style="color:var(--success);border-color:rgba(34,197,94,.4)" onclick="resumeQueueItem(${idx}, batchQueueItems, updateBatchItemEl)">▶ Resume</button>` : ''}
+      ${showRetry  ? `<button class="qi-retry" onclick="retryQueueItem(${idx}, batchQueueItems, updateBatchItemEl)">↺ Retry</button>` : ''}
+      ${showCancel ? `<button class="qi-cancel" onclick="cancelQueueItem('${item.jobId}', batchQueueItems, ${idx}, updateBatchItemEl)">✕ Cancel</button>` : ''}
+    </div>`;
+}
+
+function updateBatchLabel() {
+  const done = batchQueueItems.filter(i => i.status === 'done').length;
+  const errs = batchQueueItems.filter(i => i.status === 'error').length;
+  const total = batchQueueItems.length;
+  const running = batchQueueItems.filter(i => i.status === 'running').length;
+  let lbl = `Batch Queue — ${done}/${total} complete`;
+  if (running > 0) lbl += ` · ${running} active`;
+  if (errs > 0) lbl += ` · ${errs} failed`;
+  document.getElementById('batch-queue-label').textContent = lbl;
+}
+
+function resetBatch() {
+  clearInterval(batchInterval);
+  document.getElementById('batch-queue-section').style.display = 'none';
+  document.getElementById('batch-dl-btn').disabled = false;
+  document.getElementById('batch-input').value = '';
+  updateBatchCount();
+}
+
+function shortenUrl(url) {
+  try {
+    const u = new URL(url);
+    return u.hostname.replace('www.','') + u.pathname.slice(0,30);
+  } catch { return url.slice(0,40); }
+}
+
+// ══════════════════════════════════════════════════════
+//  FILE BROWSER
+// ══════════════════════════════════════════════════════
+let allFiles = [];
+let fileSort = 'date';
+
+async function refreshFiles() {
+  const list = document.getElementById('files-list');
+  list.innerHTML = '<div class="files-empty"><span class="spinner" style="width:20px;height:20px;border-width:2px;display:inline-block"></span></div>';
+  try {
+    const r = await fetch(`${API}/files`);
+    const d = await r.json();
+    document.getElementById('files-dir-label').textContent = d.directory || '';
+    allFiles = d.files || [];
+    renderFiles();
+  } catch(e) {
+    list.innerHTML = `<div class="files-empty">Could not load files: ${esc(e.message)}</div>`;
+  }
+}
+
+function renderFiles() {
+  const search = (document.getElementById('files-search').value || '').toLowerCase();
+  let files = allFiles.filter(f => !search || f.name.toLowerCase().includes(search));
+
+  if (fileSort === 'date') files = files.slice().sort((a,b) => b.mtime - a.mtime);
+  else if (fileSort === 'name') files = files.slice().sort((a,b) => a.name.localeCompare(b.name));
+  else if (fileSort === 'size') files = files.slice().sort((a,b) => b.size - a.size);
+
+  const list = document.getElementById('files-list');
+  if (!files.length) {
+    list.innerHTML = `<div class="files-empty">${search ? 'No files match your search.' : 'No files downloaded yet.'}</div>`;
+    return;
+  }
+
+  list.innerHTML = '';
+  files.forEach(f => {
+    const ext = f.name.split('.').pop().toLowerCase();
+    const iconCls = ['mp4','webm','mkv'].includes(ext) ? 'mp4' : ext === 'mp3' ? 'mp3' : ext === 'webm' ? 'webm' : 'other';
+    const row = document.createElement('div');
+    row.className = 'file-row';
+    row.innerHTML = `
+      <div class="file-icon ${iconCls}">${ext.toUpperCase()}</div>
+      <div class="file-meta">
+        <div class="file-name" title="${esc(f.name)}">${esc(f.name)}</div>
+        <div class="file-sub">${fmtSize(f.size)} · ${fmtAge(f.mtime)}</div>
+      </div>
+      <div class="file-actions">
+        <button class="file-btn" onclick="revealFile('${esc(f.path)}')">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M20 6h-8l-2-2H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2z"/></svg>
+          Reveal
+        </button>
+        <button class="file-btn danger" onclick="deleteFile('${esc(f.path)}', this)">
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"/></svg>
+          Delete
+        </button>
+      </div>`;
+    list.appendChild(row);
+  });
+}
+
+function filterFiles(val) { renderFiles(); }
+
+function sortFiles(by) {
+  fileSort = by;
+  document.querySelectorAll('.files-sort-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`sort-${by}`).classList.add('active');
+  renderFiles();
+}
+
+async function openFolder() {
+  try { await fetch(`${API}/open_folder`, { method: 'POST' }); }
+  catch {}
+}
+
+async function revealFile(path) {
+  try { await fetch(`${API}/reveal_file`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({path}) }); }
+  catch {}
+}
+
+async function deleteFile(path, btn) {
+  if (!confirm('Delete this file?')) return;
+  btn.disabled = true;
+  try {
+    const r = await fetch(`${API}/delete_file`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({path}) });
+    const d = await r.json();
+    if (d.ok) { allFiles = allFiles.filter(f => f.path !== path); renderFiles(); }
+    else alert('Delete failed: ' + d.error);
+  } catch(e) { alert('Error: ' + e.message); btn.disabled = false; }
+}
+
+function fmtSize(bytes) {
+  if (bytes >= 1e9) return (bytes/1e9).toFixed(1) + ' GB';
+  if (bytes >= 1e6) return (bytes/1e6).toFixed(1) + ' MB';
+  if (bytes >= 1e3) return (bytes/1e3).toFixed(0) + ' KB';
+  return bytes + ' B';
+}
+
+function fmtAge(ts) {
+  const diff = Math.floor((Date.now()/1000) - ts);
+  if (diff < 60)   return 'just now';
+  if (diff < 3600) return Math.floor(diff/60) + 'm ago';
+  if (diff < 86400) return Math.floor(diff/3600) + 'h ago';
+  return Math.floor(diff/86400) + 'd ago';
+}
+
+// ══════════════════════════════════════════════════════
+//  SINGLE VIDEO
+// ══════════════════════════════════════════════════════
+
+async function fetchInfo() {
+  const url = document.getElementById('url-input').value.trim();
+  if (!url) return;
+  const btn = document.getElementById('fetch-btn');
+  const lbl = document.getElementById('fetch-label');
+  btn.disabled = true;
+  lbl.innerHTML = '<span class="spinner"></span>';
+  try {
+    const r = await fetch(`${API}/info?url=${encodeURIComponent(url)}`);
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    const info = d.info;
+    videoDuration = info.duration || 0;
+    document.getElementById('thumb').src = info.thumbnail || '';
+    document.getElementById('video-title').textContent = info.title || 'Unknown title';
+    const platform = getPlatform(url);
+    const platformLabel = platform ? platform.label : '';
+    document.getElementById('video-sub').textContent =
+      [info.uploader, fmtDur(info.duration), platformLabel].filter(Boolean).join(' · ');
+    const safe = (info.title || 'download').replace(/[^a-zA-Z0-9 \-_]/g,'').trim().slice(0,50);
+    document.getElementById('output-name').value = safe || 'download';
+    document.getElementById('duration-hint').textContent =
+      videoDuration
+        ? `Video length: ${fmtDur(videoDuration)} — leave blank to download full video`
+        : 'Leave blank to download full video';
+    const sel = document.getElementById('quality-select');
+    const qg  = document.getElementById('quality-group');
+    const quals = info.qualities || [];
+    if (quals.length) {
+      sel.innerHTML = '<option value="best">Best available</option>';
+      quals.forEach(q => {
+        const opt = document.createElement('option');
+        opt.value = q.label; opt.textContent = q.label;
+        sel.appendChild(opt);
+      });
+      // Re-apply the saved default quality after rebuilding the options.
+      // _applySettingsToUI ran before fetchInfo rebuilt the list, so we re-apply here.
+      const savedQuality = document.getElementById('settings-quality')?.value || 'best';
+      _setSelectVal('quality-select', savedQuality);
+    } else {
+      sel.innerHTML = '<option value="best">Best available (auto)</option>';
+      qg.style.opacity = '0.4';
+      qg.style.pointerEvents = 'none';
+    }
+    document.getElementById('video-info').style.display = 'block';
+    document.getElementById('result-section').style.display = 'none';
+    document.getElementById('progress-section').style.display = 'none';
+  } catch(e) {
+    alert('Error fetching info: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    lbl.textContent = 'Fetch';
+  }
+}
+
+
+async function startDownload() {
+  const url        = document.getElementById('url-input').value.trim();
+  const quality    = document.getElementById('quality-select').value;
+  const startTime  = document.getElementById('start-time').value.trim();
+  const endTime    = document.getElementById('end-time').value.trim();
+  const outputName = document.getElementById('output-name').value.trim() || 'download';
+  const outFormat  = document.getElementById('format-select').value;
+
+  document.getElementById('video-info').style.display = 'none';
+  document.getElementById('result-section').style.display = 'none';
+  document.getElementById('progress-section').style.display = 'block';
+  document.getElementById('pause-btn').style.display = '';
+  document.getElementById('pause-btn').textContent = '⏸ Pause';
+  isPaused = false;
+  setProgress(0, 'Starting...');
+
+  try {
+    const r = await fetch(`${API}/download`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url, quality, start_time: startTime, end_time: endTime,
+                             out_format: outFormat, output_name: outputName })
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    await pollProgress(d.job_id);
+  } catch(e) {
+    document.getElementById('progress-section').style.display = 'none';
+    document.getElementById('video-info').style.display = 'block';
+    alert('Error: ' + e.message);
+  }
+}
+
+let currentJobId = null;
+let currentPollInterval = null;
+let isPaused = false;
+
+async function togglePause() {
+  if (!currentJobId) return;
+  const btn = document.getElementById('pause-btn');
+  if (!isPaused) {
+    // Pause
+    try {
+      const r = await fetch(`${API}/pause`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: currentJobId })
+      });
+      const d = await r.json();
+      if (d.ok) {
+        isPaused = true;
+        btn.textContent = '▶ Resume';
+        btn.style.color = 'var(--success)';
+        btn.style.borderColor = 'var(--success)';
+        document.getElementById('progress-msg').textContent = 'Paused';
+      }
+    } catch {}
+  } else {
+    // Resume
+    try {
+      const r = await fetch(`${API}/resume`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: currentJobId })
+      });
+      const d = await r.json();
+      if (d.ok) {
+        isPaused = false;
+        btn.textContent = '⏸ Pause';
+        btn.style.color = '';
+        btn.style.borderColor = '';
+      }
+    } catch {}
+  }
+}
+
+async function retryDownload() {
+  const jobId = document.getElementById('retry-btn').dataset.jobId;
+  if (!jobId) return;
+  document.getElementById('result-section').style.display = 'none';
+  document.getElementById('progress-section').style.display = 'block';
+  document.getElementById('pause-btn').style.display = '';
+  document.getElementById('pause-btn').textContent = '⏸ Pause';
+  isPaused = false;
+  setProgress(0, 'Retrying...');
+  try {
+    const r = await fetch(`${API}/retry`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId })
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    await pollProgress(d.job_id);
+  } catch(e) {
+    document.getElementById('progress-section').style.display = 'none';
+    alert('Retry failed: ' + e.message);
+  }
+}
+
+async function cancelDownload() {
+  if (!currentJobId) return;
+  const btn = document.getElementById('cancel-btn');
+  btn.disabled = true;
+  btn.textContent = 'Cancelling…';
+  const jobId = currentJobId;
+  currentJobId = null;
+  isPaused = false;
+
+  // Stop polling immediately so the UI doesn't wait for the server
+  if (currentPollInterval) {
+    clearInterval(currentPollInterval);
+    currentPollInterval = null;
+  }
+
+  try {
+    await fetch(`${API}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId })
+    });
+  } catch(e) {}
+
+  // Reset UI straight away — don't wait for server confirmation
+  document.getElementById('progress-section').style.display = 'none';
+  document.getElementById('pause-btn').style.display = 'none';
+  document.getElementById('video-info').style.display = 'block';
+  setProgress(0, '');
+}
+
+async function pollProgress(jobId) {
+  currentJobId = jobId;
+  const cancelBtn = document.getElementById('cancel-btn');
+  if (cancelBtn) { cancelBtn.disabled = false; cancelBtn.textContent = '✕ Cancel'; }
+
+  return new Promise((resolve, reject) => {
+    currentPollInterval = setInterval(async () => {
+      try {
+        const r = await fetch(`${API}/progress?job_id=${jobId}`);
+        const s = await r.json();
+
+        // Sync paused state from server
+        if (s.paused && !isPaused) {
+          isPaused = true;
+          const pauseBtn = document.getElementById('pause-btn');
+          if (pauseBtn) { pauseBtn.textContent = '▶ Resume'; pauseBtn.style.color = 'var(--success)'; pauseBtn.style.borderColor = 'var(--success)'; }
+        } else if (!s.paused && isPaused) {
+          isPaused = false;
+          const pauseBtn = document.getElementById('pause-btn');
+          if (pauseBtn) { pauseBtn.textContent = '⏸ Pause'; pauseBtn.style.color = ''; pauseBtn.style.borderColor = ''; }
+        }
+
+        // Use real speed/eta parsed by server from yt-dlp output
+        setProgress(s.pct, s.msg, s.done ? null : (isPaused ? null : s.speed), s.done ? null : (isPaused ? null : s.eta));
+
+        if (s.done) {
+          clearInterval(currentPollInterval);
+          currentPollInterval = null;
+          currentJobId = null;
+          isPaused = false;
+          document.getElementById('speed-badge').classList.remove('show');
+          document.getElementById('eta-label').style.display = 'none';
+          document.getElementById('progress-section').style.display = 'none';
+          document.getElementById('pause-btn').style.display = 'none';
+          if (s.error) {
+            // Show error in result section with retry option
+            const retryBtn = document.getElementById('retry-btn');
+            retryBtn.dataset.jobId = jobId;
+            retryBtn.style.display = '';
+            document.getElementById('result-icon').textContent = '❌';
+            document.getElementById('result-title').textContent = 'Download Failed';
+            document.getElementById('result-subtitle').textContent = s.error === 'Cancelled' ? 'Download was cancelled.' : (s.error || 'An error occurred.');
+            document.getElementById('result-path').textContent = '';
+            document.getElementById('result-section').style.display = 'block';
+            if (s.error !== 'Cancelled') reject(new Error(s.error));
+            else reject(new Error(s.error));
+          } else {
+            document.getElementById('result-path').textContent = s.path;
+            document.getElementById('result-icon').textContent = '✅';
+            document.getElementById('result-title').textContent = 'Download Complete';
+            document.getElementById('result-subtitle').textContent = 'File saved to your Downloads folder';
+            document.getElementById('retry-btn').style.display = 'none';
+            document.getElementById('result-section').style.display = 'block';
+            resolve();
+          }
+        }
+      } catch(e) {
+        clearInterval(currentPollInterval);
+        currentPollInterval = null;
+        currentJobId = null;
+        reject(e);
+      }
+    }, 800);
+  });
+}
+
+function setProgress(pct, msg, speed, eta) {
+  document.getElementById('progress-bar').style.width = pct + '%';
+  document.getElementById('progress-pct').textContent = Math.round(pct) + '%';
+  document.getElementById('progress-msg').textContent = msg || '';
+  const badge = document.getElementById('speed-badge');
+  const etaEl = document.getElementById('eta-label');
+  if (speed != null && speed > 0) {
+    document.getElementById('speed-value').textContent = fmtSpeed(speed);
+    badge.classList.add('show');
+  } else {
+    badge.classList.remove('show');
+  }
+  if (eta != null && eta > 0 && pct < 100) {
+    etaEl.textContent = 'ETA ' + fmtEta(eta);
+    etaEl.style.display = 'inline';
+  } else {
+    etaEl.style.display = 'none';
+  }
+}
+
+function fmtSpeed(bps) {
+  if (bps >= 1e6) return (bps/1e6).toFixed(1) + ' MB/s';
+  if (bps >= 1e3) return (bps/1e3).toFixed(0) + ' KB/s';
+  return bps + ' B/s';
+}
+
+function fmtEta(secs) {
+  if (secs >= 3600) return Math.floor(secs/3600) + 'h ' + Math.floor((secs%3600)/60) + 'm';
+  if (secs >= 60)   return Math.floor(secs/60) + 'm ' + (secs%60) + 's';
+  return secs + 's';
+}
+
+function resetApp() {
+  document.getElementById('result-section').style.display = 'none';
+  document.getElementById('video-info').style.display = 'none';
+  document.getElementById('url-input').value = '';
+  document.getElementById('start-time').value = '';
+  document.getElementById('end-time').value = '';
+  // format stays as chosen by user
+}
+
+// ══════════════════════════════════════════════════════
+//  PLAYLIST
+// ══════════════════════════════════════════════════════
+
+let plVideos = [];         // [{id, title, duration, thumbnail, url, selected}]
+let selectedIds = new Set();
+
+async function fetchPlaylist() {
+  const url = document.getElementById('pl-url-input').value.trim();
+  if (!url) return;
+
+  const btn = document.getElementById('pl-fetch-btn');
+  const lbl = document.getElementById('pl-fetch-label');
+  btn.disabled = true;
+  lbl.innerHTML = '<span class="spinner"></span>';
+
+  document.getElementById('playlist-section').style.display = 'none';
+  document.getElementById('queue-section').style.display = 'none';
+
+  try {
+    // Start async fetch
+    const r = await fetch(`${API}/fetch_playlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url })
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+
+    // Show loading state
+    document.getElementById('pl-list').innerHTML = `
+      <div class="pl-loading">
+        <span class="spinner"></span>
+        <div>Fetching playlist…</div>
+        <div style="font-size:11px;margin-top:6px;color:var(--muted)">This may take a moment for large playlists</div>
+      </div>`;
+    document.getElementById('playlist-section').style.display = 'block';
+
+    // Poll for result
+    await pollPlaylist(d.fetch_id);
+
+  } catch(e) {
+    alert('Error: ' + e.message);
+  } finally {
+    btn.disabled = false;
+    lbl.textContent = 'Load';
+  }
+}
+
+async function pollPlaylist(fetchId) {
+  return new Promise((resolve, reject) => {
+    const iv = setInterval(async () => {
+      try {
+        const r = await fetch(`${API}/playlist_status?fetch_id=${fetchId}`);
+        const s = await r.json();
+        if (s.done) {
+          clearInterval(iv);
+          if (s.error) { reject(new Error(s.error)); return; }
+          plVideos = s.videos.map(v => ({ ...v, selected: true }));
+          selectedIds = new Set(plVideos.map(v => v.id));
+          renderPlaylist();
+          resolve();
+        }
+      } catch(e) { clearInterval(iv); reject(e); }
+    }, 1000);
+  });
+}
+
+function renderPlaylist() {
+  const list = document.getElementById('pl-list');
+  if (!plVideos.length) {
+    list.innerHTML = '<div style="text-align:center;padding:24px;color:var(--muted)">No videos found in playlist.</div>';
+    updateSelCount();
+    return;
+  }
+
+  list.innerHTML = '';
+  plVideos.forEach((v, i) => {
+    const item = document.createElement('div');
+    item.className = 'pl-item' + (selectedIds.has(v.id) ? ' selected' : '');
+    item.dataset.id = v.id;
+    item.onclick = () => togglePlItem(v.id);
+    item.innerHTML = `
+      <div class="pl-check">
+        <svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41L9 16.17z"/></svg>
+      </div>
+      <img class="pl-thumb" src="${v.thumbnail || ''}" alt="" onerror="this.style.display='none'" />
+      <div class="pl-item-meta">
+        <div class="pl-item-title" title="${esc(v.title)}">${esc(v.title)}</div>
+        <div class="pl-item-sub">${v.uploader ? esc(v.uploader) + ' · ' : ''}${fmtDur(v.duration)}</div>
+      </div>`;
+    list.appendChild(item);
+  });
+  updateSelCount();
+}
+
+function togglePlItem(id) {
+  if (selectedIds.has(id)) selectedIds.delete(id);
+  else selectedIds.add(id);
+  const el = document.querySelector(`.pl-item[data-id="${id}"]`);
+  if (el) el.classList.toggle('selected', selectedIds.has(id));
+  updateSelCount();
+}
+
+function selectAll()  { plVideos.forEach(v => selectedIds.add(v.id));    renderPlaylist(); }
+function selectNone() { selectedIds.clear();                               renderPlaylist(); }
+
+function updateSelCount() {
+  document.getElementById('pl-sel-count').textContent = `${selectedIds.size} selected`;
+  document.getElementById('pl-dl-btn').disabled = selectedIds.size === 0;
+}
+
+// ── Queue management ─────────────────────────────────
+let queueItems  = [];   // [{video, jobId, status, pct, msg}]
+let activeCount = 0;
+let queuePointer = 0;
+let queueInterval = null;
+
+async function startPlaylistDownload() {
+  const selected = plVideos.filter(v => selectedIds.has(v.id));
+  if (!selected.length) return;
+
+  const quality      = document.getElementById('pl-quality').value;
+  const outFormat    = document.getElementById('pl-format').value;
+  const concurrency  = parseInt(document.getElementById('pl-concurrency').value);
+
+  queueItems = selected.map(v => ({
+    video: v, jobId: null,
+    status: 'waiting', pct: 0, msg: 'Waiting...'
+  }));
+  activeCount  = 0;
+  queuePointer = 0;
+
+  document.getElementById('playlist-section').style.display = 'none';
+  document.getElementById('queue-section').style.display = 'block';
+  renderQueue();
+
+  // tick() fires once at start, then again each time a slot frees (.finally).
+  // No timer loop — the old setTimeout was causing all items to dispatch immediately.
+  function tick() {
+    while (activeCount < concurrency && queuePointer < queueItems.length) {
+      const item = queueItems[queuePointer++];
+      activeCount++;
+      updateQueueLabel();
+      startQueueItem(item, quality, outFormat).finally(() => {
+        activeCount--;
+        tick();
+      });
+    }
+    updateQueueLabel();
+  }
+  tick();
+
+  // Lightweight interval just to detect full completion and keep label updated.
+  // Per-item progress is handled by waitForJob() inside startQueueItem.
+  queueInterval = setInterval(() => {
+    updateQueueLabel();
+    const canStop = queuePointer >= queueItems.length &&
+                    queueItems.every(i => i.status === 'done' || i.status === 'error' || !i.jobId);
+    if (canStop) {
+      clearInterval(queueInterval);
+      queueInterval = null;
+    }
+  }, 1000);
+}
+
+// Polls /progress until the job is done. Returns a Promise that resolves only
+// when the server reports done=true. This is what keeps concurrency slots occupied.
+function waitForJob(item, renderFn) {
+  return new Promise(resolve => {
+    const iv = setInterval(async () => {
+      if (!item.jobId) return;
+      try {
+        const r = await fetch(`${API}/progress?job_id=${item.jobId}`);
+        const st = await r.json();
+        item.speedBps = st.done ? 0 : (st.speed || 0);
+        item.pct = st.pct;
+        item.msg = st.msg;
+        if (st.done) {
+          clearInterval(iv);
+          item.status   = st.error ? 'error' : 'done';
+          item.msg      = st.error || st.msg;
+          item.speedBps = 0;
+          renderFn(item);
+          resolve(); // slot now free — tick() .finally() fires next
+        } else {
+          item.status = st.paused ? 'paused' : 'running';
+          renderFn(item);
+        }
+      } catch { /* network blip — keep polling */ }
+    }, 900);
+  });
+}
+
+async function startQueueItem(item, quality, outFormat) {
+  const v = item.video;
+  const safe = v.title.replace(/[^a-zA-Z0-9 \-_]/g,'').trim().slice(0,50) || 'download';
+  item.status = 'running';
+  item.msg    = 'Starting...';
+  updateQueueItemEl(item);
+
+  try {
+    const r = await fetch(`${API}/download`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: v.url, quality, out_format: outFormat,
+        output_name: safe, start_time: '', end_time: ''
+      })
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    item.jobId  = d.job_id;
+    item.status = 'running';
+    updateQueueItemEl(item);
+    // Block until done — this keeps the concurrency slot occupied
+    await waitForJob(item, updateQueueItemEl);
+  } catch(e) {
+    item.status = 'error';
+    item.msg    = e.message;
+    updateQueueItemEl(item);
+  }
+}
+
+function renderQueue() {
+  const list = document.getElementById('queue-list');
+  list.innerHTML = '';
+  queueItems.forEach((item, i) => {
+    const el = document.createElement('div');
+    el.className = 'queue-item';
+    el.id = `qi-${i}`;
+    el.innerHTML = queueItemHTML(item);
+    list.appendChild(el);
+  });
+}
+
+function updateQueueItemEl(item) {
+  const i = queueItems.indexOf(item);
+  const el = document.getElementById(`qi-${i}`);
+  if (el) el.innerHTML = queueItemHTML(item);
+}
+
+async function cancelQueueItem(jobId, store, idx, renderFn) {
+  if (!jobId) return;
+  const item = store[idx];
+  if (!item || item.status === 'done' || item.status === 'error') return;
+  item.status = 'cancelling';
+  item.msg = 'Cancelling…';
+  renderFn(item);
+  try {
+    await fetch(`${API}/cancel`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: jobId })
+    });
+  } catch {}
+  item.status = 'error';
+  item.msg = 'Cancelled';
+  renderFn(item);
+}
+
+async function pauseQueueItem(idx, store, renderFn) {
+  const item = store[idx];
+  if (!item || !item.jobId || item.status !== 'running') return;
+  try {
+    const r = await fetch(`${API}/pause`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: item.jobId })
+    });
+    const d = await r.json();
+    if (d.ok) { item.status = 'paused'; item.msg = 'Paused'; renderFn(item); }
+  } catch {}
+}
+
+async function resumeQueueItem(idx, store, renderFn) {
+  const item = store[idx];
+  if (!item || !item.jobId || item.status !== 'paused') return;
+  try {
+    const r = await fetch(`${API}/resume`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: item.jobId })
+    });
+    const d = await r.json();
+    if (d.ok) { item.status = 'running'; item.msg = 'Downloading…'; renderFn(item); }
+  } catch {}
+}
+
+async function retryQueueItem(idx, store, renderFn) {
+  const item = store[idx];
+  if (!item || !item.jobId) return;
+  item.status = 'running'; item.pct = 0; item.msg = 'Retrying…'; item.speedBps = 0;
+  renderFn(item);
+
+  // Determine which interval to restart if it has died
+  const isPlaylist = store === queueItems;
+  const getInterval = () => isPlaylist ? queueInterval : batchInterval;
+  const setIntervalRef = (iv) => { if (isPlaylist) queueInterval = iv; else batchInterval = iv; };
+
+  try {
+    const r = await fetch(`${API}/retry`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ job_id: item.jobId })
+    });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error);
+    item.jobId = d.job_id;
+    renderFn(item);
+
+    // Restart the poll interval if it stopped (happens when all items were 'error')
+    if (!getInterval()) {
+      const iv = setInterval(async () => {
+        for (const qi of store) {
+          if (!qi.jobId || qi.status === 'done' || qi.status === 'cancelling' || qi.status === 'waiting') continue;
+          try {
+            const res = await fetch(`${API}/progress?job_id=${qi.jobId}`);
+            const s = await res.json();
+            qi.speedBps = s.done ? 0 : (s.speed || 0);
+            qi.pct = s.pct; qi.msg = s.msg;
+            if (s.done) { qi.status = s.error ? 'error' : 'done'; qi.msg = s.error || s.msg; qi.speedBps = 0; }
+            else if (s.paused) { qi.status = 'paused'; }
+            else { qi.status = 'running'; }
+            renderFn(qi);
+          } catch {}
+        }
+        if (isPlaylist) { updateQueueLabel(); } else { updateBatchLabel(); }
+        const ptr = isPlaylist ? queuePointer : batchPointer;
+        const canStop = ptr >= store.length && store.every(i => i.status === 'done' || !i.jobId);
+        if (canStop) { clearInterval(iv); setIntervalRef(null); }
+      }, 900);
+      setIntervalRef(iv);
+    }
+  } catch(e) {
+    item.status = 'error'; item.msg = 'Retry failed: ' + e.message; renderFn(item);
+  }
+}
+
+function queueItemHTML(item) {
+  const statusLabel = { waiting: 'Waiting', running: 'Downloading', paused: 'Paused', cancelling: 'Cancelling', done: 'Done', error: 'Error' }[item.status] || item.status;
+  const showCancel = item.jobId && (item.status === 'running' || item.status === 'waiting' || item.status === 'paused');
+  const showPause  = item.jobId && item.status === 'running';
+  const showResume = item.jobId && item.status === 'paused';
+  const showRetry  = item.status === 'error' && item.jobId;
+  const idx = queueItems.indexOf(item);
+  const showSpeed = item.status === 'running' && item.speedBps > 0;
+  return `
+    <div class="qi-header">
+      <div class="qi-title" title="${esc(item.video.title)}">${esc(item.video.title)}</div>
+      <div class="qi-status ${item.status}">${statusLabel}</div>
+    </div>
+    <div class="qi-bar-bg">
+      <div class="qi-bar ${item.status}" style="width:${item.pct}%"></div>
+    </div>
+    <div class="qi-footer">
+      <div class="qi-msg">${esc(item.msg || '')}</div>
+      ${showSpeed ? `<span class="qi-speed show">⚡ ${fmtSpeed(item.speedBps)}</span>` : ''}
+      ${showPause  ? `<button class="qi-pause" onclick="pauseQueueItem(${idx}, queueItems, updateQueueItemEl)">⏸ Pause</button>` : ''}
+      ${showResume ? `<button class="qi-pause" style="color:var(--success);border-color:rgba(34,197,94,.4)" onclick="resumeQueueItem(${idx}, queueItems, updateQueueItemEl)">▶ Resume</button>` : ''}
+      ${showRetry  ? `<button class="qi-retry" onclick="retryQueueItem(${idx}, queueItems, updateQueueItemEl)">↺ Retry</button>` : ''}
+      ${showCancel ? `<button class="qi-cancel" onclick="cancelQueueItem('${item.jobId}', queueItems, ${idx}, updateQueueItemEl)">✕ Cancel</button>` : ''}
+    </div>`;
+}
+
+function updateQueueLabel() {
+  const done    = queueItems.filter(i => i.status === 'done').length;
+  const errors  = queueItems.filter(i => i.status === 'error').length;
+  const total   = queueItems.length;
+  const running = queueItems.filter(i => i.status === 'running').length;
+  let label = `Download Queue — ${done}/${total} complete`;
+  if (running > 0) label += ` · ${running} active`;
+  if (errors  > 0) label += ` · ${errors} failed`;
+  document.getElementById('queue-label').textContent = label;
+}
+
+function resetPlaylist() {
+  clearInterval(queueInterval);
+  document.getElementById('queue-section').style.display = 'none';
+  document.getElementById('playlist-section').style.display = 'block';
+}
+
+// ── Helpers ──────────────────────────────────────────
+function fmtDur(secs) {
+  if (!secs) return '?';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  if (h > 0) return `${h}:${pad(m)}:${pad(s)}`;
+  return `${m}:${pad(s)}`;
+}
+function pad(n) { return n.toString().padStart(2,'0'); }
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Enter key ────────────────────────────────────────
+document.getElementById('url-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') fetchInfo();
+});
+document.getElementById('pl-url-input').addEventListener('keydown', e => {
+  if (e.key === 'Enter') fetchPlaylist();
+});
+
+// ── Init ─────────────────────────────────────────────
+checkServer();
+setInterval(checkServer, 10000);
+</script>
+</body>
+</html>
