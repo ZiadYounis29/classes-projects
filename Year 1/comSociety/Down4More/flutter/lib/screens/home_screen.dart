@@ -42,11 +42,11 @@ class _HomeScreenState extends State<HomeScreen> {
       case 0:
         return SingleScreen(appSettings: widget.appSettings);
       case 1:
-        return const PlaylistScreen();
+        return PlaylistScreen(appSettings: widget.appSettings);
       case 2:
-        return const BatchScreen();
+        return BatchScreen(appSettings: widget.appSettings);
       case 3:
-        return const FilesScreen();
+        return FilesScreen(appSettings: widget.appSettings);
       case 4:
         return SettingsScreen(
           themeController: widget.themeController,

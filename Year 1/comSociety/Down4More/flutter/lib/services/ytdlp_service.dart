@@ -6,6 +6,7 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
 import '../models/download_progress.dart';
+import '../models/playlist_entry.dart';
 import '../models/video_metadata.dart';
 
 /// Thin wrapper around the `yt-dlp` CLI. Pure Dart, no UI deps — safe to
@@ -70,6 +71,55 @@ class YtDlpService {
         "Couldn't parse yt-dlp's JSON output: ${e.message}",
       );
     }
+  }
+
+  /// Run `yt-dlp --flat-playlist --dump-json` to list all entries in a
+  /// playlist without downloading anything. Each line of stdout is a JSON
+  /// object describing one video.
+  ///
+  /// Throws [YtDlpException] on failure.
+  Future<List<PlaylistEntry>> fetchPlaylist(String url) async {
+    if (url.trim().isEmpty) {
+      throw YtDlpException('URL is empty.');
+    }
+    final args = <String>[
+      '--flat-playlist',
+      '--dump-json',
+      '--no-warnings',
+      url,
+    ];
+
+    final ProcessResult result;
+    try {
+      result = await _runner(_exe, args);
+    } on ProcessException catch (e) {
+      throw YtDlpException(
+        'yt-dlp not found at "$_exe". Install it with `pip install yt-dlp` '
+        'or apt/brew. Original error: ${e.message}',
+      );
+    }
+    if (result.exitCode != 0) {
+      final stderr = (result.stderr as String?)?.trim() ?? '';
+      throw YtDlpException(
+        stderr.isEmpty
+            ? 'yt-dlp exited with code ${result.exitCode}.'
+            : stderr,
+      );
+    }
+
+    final stdout = result.stdout as String;
+    final entries = <PlaylistEntry>[];
+    for (final line in stdout.trim().split('\n')) {
+      if (line.trim().isEmpty) continue;
+      try {
+        final json = jsonDecode(line) as Map<String, dynamic>;
+        final entry = PlaylistEntry.fromJson(json);
+        if (entry.url.isNotEmpty) entries.add(entry);
+      } catch (_) {
+        continue;
+      }
+    }
+    return entries;
   }
 
   /// Start an actual download. Returns a [DownloadHandle] you can listen to

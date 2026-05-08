@@ -38,6 +38,7 @@ class SingleDownloadController extends ChangeNotifier {
   Duration? _trimEnd;
   DownloadHandle? _handle;
   StreamSubscription<DownloadProgress>? _progressSub;
+  int _retryAttempt = 0;
 
   DownloadProgress get progress => _progress;
   VideoMetadata? get metadata => _metadata;
@@ -62,6 +63,7 @@ class SingleDownloadController extends ChangeNotifier {
     _selectedOutputFormat = kDefaultVideoFormat;
     _trimStart = null;
     _trimEnd = null;
+    _retryAttempt = 0;
     notifyListeners();
 
     try {
@@ -159,6 +161,22 @@ class SingleDownloadController extends ChangeNotifier {
     _progressSub = _handle!.stream.listen((event) {
       _progress = event;
       notifyListeners();
+
+      // Auto-retry on error if configured.
+      if (event.phase == DownloadPhase.error) {
+        final maxRetries = _appSettings?.autoRetry ?? 0;
+        if (_retryAttempt < maxRetries) {
+          _retryAttempt++;
+          final delay = _appSettings?.retryDelay ?? 5;
+          Future.delayed(Duration(seconds: delay), () {
+            if (_progress.phase == DownloadPhase.error) {
+              startDownload();
+            }
+          });
+        }
+      } else if (event.phase == DownloadPhase.finished) {
+        _retryAttempt = 0;
+      }
     });
   }
 
@@ -191,6 +209,7 @@ class SingleDownloadController extends ChangeNotifier {
     _selectedOutputFormat = kDefaultVideoFormat;
     _trimStart = null;
     _trimEnd = null;
+    _retryAttempt = 0;
     notifyListeners();
   }
 
