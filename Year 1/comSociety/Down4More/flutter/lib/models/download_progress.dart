@@ -16,6 +16,10 @@ enum DownloadPhase {
   /// `yt-dlp` is downloading the chosen format. UI shows a progress bar.
   downloading,
 
+  /// yt-dlp finished and ffmpeg is now cutting the requested segment.
+  /// Only reached when the user set a start or end time.
+  trimming,
+
   /// File saved to disk successfully. UI shows the success card with
   /// "Open file" / "Open folder" actions.
   finished,
@@ -34,6 +38,7 @@ enum DownloadPhase {
 class DownloadProgress {
   const DownloadProgress({
     required this.phase,
+    this.paused = false,
     this.percent,
     this.speedBytesPerSecond,
     this.eta,
@@ -45,6 +50,12 @@ class DownloadProgress {
   });
 
   final DownloadPhase phase;
+
+  /// True while the download is paused. Only meaningful when
+  /// [phase] is [DownloadPhase.downloading]. The yt-dlp process is still
+  /// alive but stalled — we stopped reading its stdout pipe so the OS buffer
+  /// fills and the process blocks naturally (no SIGSTOP needed).
+  final bool paused;
 
   /// 0.0–100.0 progress percentage. `null` when not in [DownloadPhase.downloading].
   final double? percent;

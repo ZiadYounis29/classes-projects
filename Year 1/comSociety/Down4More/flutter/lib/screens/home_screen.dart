@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../settings/app_settings.dart';
 import '../theme/theme_controller.dart';
 import '../widgets/d4m_logo.dart';
 import 'batch_screen.dart';
@@ -12,9 +13,14 @@ import 'single_screen.dart';
 /// left; narrow layouts (phones) get a bottom [NavigationBar] with the logo in
 /// an [AppBar].
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.themeController});
+  const HomeScreen({
+    super.key,
+    required this.themeController,
+    required this.appSettings,
+  });
 
   final ThemeController themeController;
+  final AppSettings appSettings;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -34,7 +40,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _bodyAt(int i) {
     switch (i) {
       case 0:
-        return const SingleScreen();
+        return SingleScreen(appSettings: widget.appSettings);
       case 1:
         return const PlaylistScreen();
       case 2:
@@ -42,7 +48,10 @@ class _HomeScreenState extends State<HomeScreen> {
       case 3:
         return const FilesScreen();
       case 4:
-        return SettingsScreen(themeController: widget.themeController);
+        return SettingsScreen(
+          themeController: widget.themeController,
+          appSettings: widget.appSettings,
+        );
       default:
         throw StateError('Unknown tab index $i');
     }
