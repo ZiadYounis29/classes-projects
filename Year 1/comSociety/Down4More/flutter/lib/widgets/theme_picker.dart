@@ -236,9 +236,6 @@ class _CustomThemeDialogState extends State<_CustomThemeDialog> {
               id: kCustomPresetId,
               name: 'Custom',
               primary: _primary,
-              seed: _brightness == Brightness.light
-                  ? const Color(0xFFF8F9FB)
-                  : const Color(0xFF0F0F12),
               brightness: _brightness,
               description: 'Your custom theme.',
             );

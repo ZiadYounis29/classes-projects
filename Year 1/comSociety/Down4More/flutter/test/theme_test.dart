@@ -72,7 +72,6 @@ void main() {
           id: kCustomPresetId,
           name: 'Custom',
           primary: Color(0xFF00BFA5),
-          seed: Color(0xFF0F0F12),
           brightness: Brightness.dark,
           description: 'Your custom theme.',
         ),

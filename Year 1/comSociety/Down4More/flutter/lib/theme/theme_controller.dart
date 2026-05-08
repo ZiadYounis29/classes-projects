@@ -11,7 +11,6 @@ class ThemeController extends ChangeNotifier {
 
   static const _kKeyPresetId = 'd4m.theme.id';
   static const _kKeyCustomPrimary = 'd4m.theme.custom.primary';
-  static const _kKeyCustomSeed = 'd4m.theme.custom.seed';
   static const _kKeyCustomBrightness = 'd4m.theme.custom.brightness';
 
   SharedPreferences? _prefs;
@@ -30,7 +29,6 @@ class ThemeController extends ChangeNotifier {
         id: kCustomPresetId,
         name: 'Custom',
         primary: Color(_prefs!.getInt(_kKeyCustomPrimary) ?? 0xFF888888),
-        seed: Color(_prefs!.getInt(_kKeyCustomSeed) ?? 0xFF111111),
         brightness: _prefs!.getString(_kKeyCustomBrightness) == 'light'
             ? Brightness.light
             : Brightness.dark,
@@ -49,7 +47,6 @@ class ThemeController extends ChangeNotifier {
     await _prefs!.setString(_kKeyPresetId, preset.id);
     if (preset.id == kCustomPresetId) {
       await _prefs!.setInt(_kKeyCustomPrimary, preset.primary.toARGB32());
-      await _prefs!.setInt(_kKeyCustomSeed, preset.seed.toARGB32());
       await _prefs!.setString(
         _kKeyCustomBrightness,
         preset.brightness == Brightness.light ? 'light' : 'dark',
