@@ -38,6 +38,15 @@ dependencies:
   # Persists the user's chosen theme preset across launches.
   shared_preferences: ^2.3.2
 
+  # Resolves the platform's default Downloads folder (used as the destination
+  # for downloads when the user hasn't picked a custom one).
+  path_provider: ^2.1.4
+
+  # "Open file" / "Open folder" / "Open in browser" actions on the post-download
+  # success card. Cross-platform; on desktop it shells out to xdg-open / open /
+  # start, on Android it uses ACTION_VIEW intents.
+  url_launcher: ^6.3.1
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
