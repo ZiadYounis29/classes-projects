@@ -46,6 +46,7 @@ dependencies:
   # success card. Cross-platform; on desktop it shells out to xdg-open / open /
   # start, on Android it uses ACTION_VIEW intents.
   url_launcher: ^6.3.1
+  path: ^1.9.0
 
 dev_dependencies:
   flutter_test:

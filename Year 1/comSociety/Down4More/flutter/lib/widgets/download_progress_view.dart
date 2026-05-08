@@ -124,7 +124,7 @@ class _DownloadingCard extends StatelessWidget {
                 minHeight: 6,
                 backgroundColor: scheme.surfaceContainerHighest,
                 // Dim the bar colour when paused to reinforce the paused state.
-                color: paused ? scheme.primary.withOpacity(0.45) : null,
+                color: paused ? scheme.primary.withValues(alpha: 0.45) : null,
               ),
             ),
             const SizedBox(height: 10),

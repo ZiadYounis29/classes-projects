@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
-import '../models/output_format.dart';
 import '../settings/app_settings.dart';
 import '../theme/theme_controller.dart';
 import '../widgets/theme_picker.dart';

@@ -1,4 +1,5 @@
 import 'package:down4more/main.dart';
+import 'package:down4more/settings/app_settings.dart';
 import 'package:down4more/theme/theme_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,7 +21,10 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(Down4MoreApp(themeController: controller));
+    final appSettings = AppSettings();
+    await appSettings.load();
+
+    await tester.pumpWidget(Down4MoreApp(themeController: controller, appSettings: appSettings));
     await tester.pumpAndSettle();
 
     expect(find.text('Single'), findsOneWidget);
@@ -39,7 +43,10 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(Down4MoreApp(themeController: controller));
+    final appSettings = AppSettings();
+    await appSettings.load();
+
+    await tester.pumpWidget(Down4MoreApp(themeController: controller, appSettings: appSettings));
     await tester.pumpAndSettle();
 
     await tester.tap(find.text('Settings'));

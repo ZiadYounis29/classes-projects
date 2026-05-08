@@ -259,10 +259,6 @@ class YtDlpService {
         // what yt-dlp actually produced (e.g. m4a instead of mp3 when
         // ffmpeg transcoding was skipped).
         final tempExt = p.extension(tempPath); // includes the dot
-        final safeTemplate = outputTemplate.replaceAll(
-          RegExp(r'%\(ext\)s'),
-          tempExt.replaceFirst('.', ''),
-        );
         // yt-dlp template tokens like %(title).200B cannot be resolved here,
         // so we just use the temp file's own basename (minus the _d4m_temp_
         // prefix and the timestamp).
