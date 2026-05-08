@@ -1,42 +1,36 @@
 # Down4More
 
-Multi-platform video downloader & slicer. Originally built as the project for the
-Computer & Society course (Year 1).
+A multi-platform video downloader (YouTube, Instagram, Facebook, X / Twitter,
+TikTok) — in active development, originally a Computer & Society course
+project that grew into a personal app.
 
-Supports YouTube, Instagram, Facebook, X / Twitter, and TikTok via
-[yt-dlp](https://github.com/yt-dlp/yt-dlp), with optional time-based slicing via
-[ffmpeg](https://ffmpeg.org/).
+This folder contains **two implementations of the same app**:
 
-## Run
+| Folder | Implementation | Status |
+|---|---|---|
+| [`python/`](./python) | The original Python `http.server` + HTML/CSS/JS prototype. Single-file deploy, browser-based UI, runs on Win/Mac/Linux. | **Working today.** Treated as the reference behaviour while the Flutter port catches up. |
+| [`flutter/`](./flutter) | The new Flutter port. One Dart codebase that targets Linux, macOS, Windows, and Android with native UI on each platform. Self-contained per device — bundles `yt-dlp` + `ffmpeg` so there's no hub or HTTP server. | **In progress.** PR 2 is the scaffold; download logic lands in PR 3+. |
 
-```bash
-pip install yt-dlp
-# install ffmpeg from your package manager (apt / brew / winget)
-python server.py
-```
+## Why both?
 
-The server starts on `http://localhost:8765` and auto-opens it in your browser.
+The Python version is shippable as-is and lets us actually use the app while
+the Flutter rewrite is being built. Once the Flutter port reaches feature
+parity (around PR 8 in the roadmap), the Python prototype can be archived or
+deleted.
 
-## Features
+## How to run
 
-- YouTube / Instagram / Facebook / X / TikTok video & audio downloads
-- Quality picker (best / 1080p / 720p / ...)
-- Audio-only export to MP3 / M4A / FLAC / OGG / WAV / OPUS
-- Segment trimming via start / end timestamps
-- Playlist mode with per-video selective options
-- Download queue with pause / resume / cancel / retry
-- Auto-retry on network errors with configurable delay
-- Persistent settings (download folder, default quality, speed limit, etc.)
+For the Python version, see [`python/README.md`](./python/README.md).
+For the Flutter version, see [`flutter/README.md`](./flutter/README.md).
 
-## Files
+## Architecture decisions
 
-- `server.py` — Python `http.server`-based backend that orchestrates `yt-dlp`
-  and `ffmpeg` and serves the UI.
-- `index.html` — single-file frontend (HTML + CSS + JS) for the downloader UI.
-- `settings.json` — created at runtime; persists user preferences.
+- **Self-contained per device.** Each install bundles its own `yt-dlp` and
+  `ffmpeg` binaries — no hub, no HTTP server, nothing exposed on the LAN.
+- **Native look on each OS.** Material 3 on Android, Material on Linux, with
+  per-platform window chrome on desktop. No "this looks like a webpage" feel.
+- **No iOS.** Apple's sandbox rules forbid spawning subprocesses, which makes
+  yt-dlp impossible to ship in a real iOS app. Anyone who claims otherwise
+  is wrong about iOS, not Flutter.
 
-## Roadmap
-
-This is the original Python + HTML implementation. A planned future revision
-will rebuild this as a self-contained native app for Windows, macOS, Linux,
-and Android — yt-dlp bundled per platform, no server, no shared hosting.
+See the per-implementation READMEs for runtime details.
