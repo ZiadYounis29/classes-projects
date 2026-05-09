@@ -25,7 +25,10 @@ void main() {
     await appSettings.load();
 
     await tester.pumpWidget(Down4MoreApp(themeController: controller, appSettings: appSettings));
-    await tester.pumpAndSettle();
+    // Use pump() instead of pumpAndSettle() because IndexedStack keeps all
+    // tab screens alive and some contain ongoing animations.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
 
     expect(find.text('Single'), findsOneWidget);
     expect(find.text('Playlist'), findsOneWidget);
@@ -47,10 +50,12 @@ void main() {
     await appSettings.load();
 
     await tester.pumpWidget(Down4MoreApp(themeController: controller, appSettings: appSettings));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
 
     await tester.tap(find.text('Settings'));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
 
     expect(find.text('APPEARANCE'), findsOneWidget);
     expect(find.text('Theme: Crimson'), findsOneWidget);

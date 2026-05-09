@@ -36,6 +36,8 @@ class SingleDownloadController extends ChangeNotifier {
   OutputFormat _selectedOutputFormat = kDefaultVideoFormat;
   Duration? _trimStart;
   Duration? _trimEnd;
+  String _customFilename = '';
+  bool _filenameManuallyEdited = false;
   DownloadHandle? _handle;
   StreamSubscription<DownloadProgress>? _progressSub;
   int _retryAttempt = 0;
@@ -46,6 +48,7 @@ class SingleDownloadController extends ChangeNotifier {
   OutputFormat get selectedOutputFormat => _selectedOutputFormat;
   Duration? get trimStart => _trimStart;
   Duration? get trimEnd => _trimEnd;
+  String get customFilename => _customFilename;
 
   bool get isBusy =>
       _progress.phase == DownloadPhase.fetchingMetadata ||
@@ -74,6 +77,8 @@ class SingleDownloadController extends ChangeNotifier {
       if (_selectedFormat?.isAudioOnly == true) {
         _selectedOutputFormat = kDefaultAudioFormat;
       }
+      _customFilename = m.title;
+      _filenameManuallyEdited = false;
       _progress = const DownloadProgress(phase: DownloadPhase.ready);
     } on YtDlpException catch (e) {
       _progress = DownloadProgress(
@@ -111,13 +116,45 @@ class SingleDownloadController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Set the custom filename. Marks it as manually edited so trim changes
+  /// won't overwrite the user's choice.
+  void setCustomFilename(String name) {
+    _customFilename = name;
+    _filenameManuallyEdited = true;
+    notifyListeners();
+  }
+
   /// Update the trim window. Pass null to clear a boundary.
   /// Silently ignores invalid combinations (start >= end) — the UI widget
   /// validates before calling this.
   void setTrim({Duration? start, Duration? end}) {
     _trimStart = start;
     _trimEnd = end;
+    // Auto-update filename with trim range unless user manually edited it.
+    if (!_filenameManuallyEdited && _metadata != null) {
+      _updateAutoFilename();
+    }
     notifyListeners();
+  }
+
+  void _updateAutoFilename() {
+    final title = _metadata?.title ?? '';
+    if (_trimStart != null || _trimEnd != null) {
+      final startStr = _formatTrimLabel(_trimStart ?? Duration.zero);
+      final endStr = _formatTrimLabel(
+          _trimEnd ?? _metadata?.duration ?? Duration.zero);
+      _customFilename = '$title [$startStr-$endStr]';
+    } else {
+      _customFilename = title;
+    }
+  }
+
+  static String _formatTrimLabel(Duration d) {
+    final h = d.inHours;
+    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+    if (h > 0) return '${h}h${m}m${s}s';
+    return '${m}m${s}s';
   }
 
   /// Kick off the actual download. No-op if there's no metadata + format yet.
@@ -152,6 +189,7 @@ class SingleDownloadController extends ChangeNotifier {
       format: f,
       outputDir: dir,
       outputExt: _selectedOutputFormat.ext,
+      customFilename: _customFilename.isNotEmpty ? _customFilename : null,
       trimStart: _trimStart,
       trimEnd: _trimEnd,
       rateLimit: _appSettings?.hasSpeedLimit == true
@@ -209,6 +247,8 @@ class SingleDownloadController extends ChangeNotifier {
     _selectedOutputFormat = kDefaultVideoFormat;
     _trimStart = null;
     _trimEnd = null;
+    _customFilename = '';
+    _filenameManuallyEdited = false;
     _retryAttempt = 0;
     notifyListeners();
   }

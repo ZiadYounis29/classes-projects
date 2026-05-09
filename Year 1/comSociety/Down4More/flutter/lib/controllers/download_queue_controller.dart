@@ -88,6 +88,10 @@ class DownloadQueueController extends ChangeNotifier {
   Future<void> startAll() async {
     if (_running) return;
     _running = true;
+    // Pre-create the output directory before any items start downloading.
+    // This avoids race conditions where yt-dlp tries to rename a file into
+    // a directory that hasn't been created yet.
+    await _resolveOutputDir();
     notifyListeners();
     await _processQueue();
   }
@@ -157,8 +161,12 @@ class DownloadQueueController extends ChangeNotifier {
         continue;
       }
 
-      // Start this item.
+      // Mark as non-idle synchronously BEFORE the async _startItem runs,
+      // so the loop won't pick up the same item again on the next iteration.
       _activeCount++;
+      nextIdle.progress =
+          const DownloadProgress(phase: DownloadPhase.downloading);
+      notifyListeners();
       _startItem(nextIdle);
     }
 

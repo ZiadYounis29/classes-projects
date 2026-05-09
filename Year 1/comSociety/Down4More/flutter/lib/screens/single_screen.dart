@@ -26,23 +26,36 @@ class SingleScreen extends StatefulWidget {
 class _SingleScreenState extends State<SingleScreen> {
   late final SingleDownloadController _controller;
   late final TextEditingController _urlController;
+  late final TextEditingController _filenameController;
   bool _ownsController = false;
 
   @override
   void initState() {
     super.initState();
     _urlController = TextEditingController();
+    _filenameController = TextEditingController();
     if (widget.controller != null) {
       _controller = widget.controller!;
     } else {
       _controller = SingleDownloadController(appSettings: widget.appSettings);
       _ownsController = true;
     }
+    // Sync the filename text field when the controller updates it
+    // (e.g. after metadata fetch or trim change).
+    _controller.addListener(_syncFilenameField);
+  }
+
+  void _syncFilenameField() {
+    if (_filenameController.text != _controller.customFilename) {
+      _filenameController.text = _controller.customFilename;
+    }
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_syncFilenameField);
     _urlController.dispose();
+    _filenameController.dispose();
     if (_ownsController) {
       _controller.dispose();
     }
@@ -150,6 +163,20 @@ class _SingleScreenState extends State<SingleScreen> {
                       videoDuration: metadata.duration,
                       onChanged: (start, end) =>
                           _controller.setTrim(start: start, end: end),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _filenameController,
+                      enabled: !isDownloading,
+                      onChanged: (value) =>
+                          _controller.setCustomFilename(value),
+                      decoration: InputDecoration(
+                        labelText: 'File name',
+                        hintText: 'Enter custom file name',
+                        prefixIcon:
+                            const Icon(Icons.drive_file_rename_outline),
+                        suffixText: '.${_controller.selectedOutputFormat.ext}',
+                      ),
                     ),
                     const SizedBox(height: 16),
                     if (progress.phase == DownloadPhase.ready)

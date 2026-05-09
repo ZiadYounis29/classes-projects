@@ -143,6 +143,7 @@ class YtDlpService {
     required String outputDir,
     String outputExt = 'mp4',
     String outputTemplate = '%(title).200B [%(id)s].%(ext)s',
+    String? customFilename,
     Duration? trimStart,
     Duration? trimEnd,
     String? rateLimit,
@@ -162,9 +163,14 @@ class YtDlpService {
 
     // When trimming we download to a temp file so ffmpeg can read it cleanly.
     // The temp name uses a fixed prefix so it can be found and deleted on error.
-    final String effectiveTemplate = isTrimming
-        ? '_d4m_temp_${DateTime.now().millisecondsSinceEpoch}.%(ext)s'
-        : outputTemplate;
+    final String effectiveTemplate;
+    if (isTrimming) {
+      effectiveTemplate = '_d4m_temp_${DateTime.now().millisecondsSinceEpoch}.%(ext)s';
+    } else if (customFilename != null && customFilename.isNotEmpty) {
+      effectiveTemplate = '${_sanitizeFilename(customFilename)}.%(ext)s';
+    } else {
+      effectiveTemplate = outputTemplate;
+    }
 
     final args = <String>[
       '--newline',
@@ -303,19 +309,18 @@ class YtDlpService {
           ),
         );
 
-        // Build the final output path: same name as would have been used
-        // without trimming (the outputTemplate), but inside outputDir.
-        // We derive the extension from the temp file so it always matches
-        // what yt-dlp actually produced (e.g. m4a instead of mp3 when
-        // ffmpeg transcoding was skipped).
         final tempExt = p.extension(tempPath); // includes the dot
-        // yt-dlp template tokens like %(title).200B cannot be resolved here,
-        // so we just use the temp file's own basename (minus the _d4m_temp_
-        // prefix and the timestamp).
-        final tempBasename = p.basenameWithoutExtension(tempPath);
-        final finalName = tempBasename
-            .replaceFirst(RegExp(r'^_d4m_temp_\d+'), 'trimmed')
-            .trim();
+        // Use custom filename if provided, otherwise auto-generate from
+        // the video title + trim range.
+        final String finalName;
+        if (customFilename != null && customFilename.isNotEmpty) {
+          finalName = _sanitizeFilename(customFilename);
+        } else {
+          final safeTitle = _sanitizeFilename(metadata.title);
+          final startStr = _formatTrimRange(trimStart ?? Duration.zero);
+          final endStr = _formatTrimRange(trimEnd ?? metadata.duration ?? Duration.zero);
+          finalName = '$safeTitle [$startStr-$endStr]';
+        }
         final finalPath = p.join(outputDir, '$finalName$tempExt');
 
         final ffmpegArgs = _buildFfmpegArgs(
@@ -412,7 +417,11 @@ List<String> _buildFfmpegArgs({
     '-loglevel', 'error',
     if (start != null) ...[ '-ss', _durToFfmpeg(start) ],
     '-i', inputPath,
-    if (end != null) ...[ '-to', _durToFfmpeg(end) ],
+    // When -ss is before -i (input seeking), -to is relative to the seeked
+    // position, not the original file. Use -t (duration) instead so that
+    // start=1:00 end=2:00 produces a 1-minute clip, not a 2-minute one.
+    if (end != null && start != null) ...[ '-t', _durToFfmpeg(end - start) ]
+    else if (end != null) ...[ '-to', _durToFfmpeg(end) ],
     '-c', 'copy',
     outputPath,
   ];
@@ -425,6 +434,20 @@ String _durToFfmpeg(Duration d) {
   final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
   final ms = (d.inMilliseconds.remainder(1000)).toString().padLeft(3, '0');
   return '$h:$m:$s.$ms';
+}
+
+/// Replace filesystem-unsafe characters with underscores.
+String _sanitizeFilename(String name) {
+  return name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
+}
+
+/// Format a Duration as a compact trim-range label, e.g. `01m30s`.
+String _formatTrimRange(Duration d) {
+  final h = d.inHours;
+  final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  if (h > 0) return '${h}h${m}m${s}s';
+  return '${m}m${s}s';
 }
 
 /// Best-effort temp file deletion. Swallows errors — if the file is already
