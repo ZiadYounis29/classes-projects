@@ -1,4 +1,5 @@
 import 'package:down4more/main.dart';
+import 'package:down4more/settings/app_settings.dart';
 import 'package:down4more/theme/theme_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -20,8 +21,14 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(Down4MoreApp(themeController: controller));
-    await tester.pumpAndSettle();
+    final appSettings = AppSettings();
+    await appSettings.load();
+
+    await tester.pumpWidget(Down4MoreApp(themeController: controller, appSettings: appSettings));
+    // Use pump() instead of pumpAndSettle() because IndexedStack keeps all
+    // tab screens alive and some contain ongoing animations.
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
 
     expect(find.text('Single'), findsOneWidget);
     expect(find.text('Playlist'), findsOneWidget);
@@ -39,11 +46,16 @@ void main() {
     addTearDown(tester.view.resetPhysicalSize);
     addTearDown(tester.view.resetDevicePixelRatio);
 
-    await tester.pumpWidget(Down4MoreApp(themeController: controller));
-    await tester.pumpAndSettle();
+    final appSettings = AppSettings();
+    await appSettings.load();
+
+    await tester.pumpWidget(Down4MoreApp(themeController: controller, appSettings: appSettings));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
 
     await tester.tap(find.text('Settings'));
-    await tester.pumpAndSettle();
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 500));
 
     expect(find.text('APPEARANCE'), findsOneWidget);
     expect(find.text('Theme: Crimson'), findsOneWidget);

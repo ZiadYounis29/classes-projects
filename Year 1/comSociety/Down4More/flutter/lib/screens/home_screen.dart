@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../settings/app_settings.dart';
 import '../theme/theme_controller.dart';
 import '../widgets/d4m_logo.dart';
 import 'batch_screen.dart';
@@ -12,9 +13,14 @@ import 'single_screen.dart';
 /// left; narrow layouts (phones) get a bottom [NavigationBar] with the logo in
 /// an [AppBar].
 class HomeScreen extends StatefulWidget {
-  const HomeScreen({super.key, required this.themeController});
+  const HomeScreen({
+    super.key,
+    required this.themeController,
+    required this.appSettings,
+  });
 
   final ThemeController themeController;
+  final AppSettings appSettings;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -22,6 +28,22 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
+  late final List<Widget> _screens;
+
+  @override
+  void initState() {
+    super.initState();
+    _screens = [
+      SingleScreen(appSettings: widget.appSettings),
+      PlaylistScreen(appSettings: widget.appSettings),
+      BatchScreen(appSettings: widget.appSettings),
+      FilesScreen(appSettings: widget.appSettings),
+      SettingsScreen(
+        themeController: widget.themeController,
+        appSettings: widget.appSettings,
+      ),
+    ];
+  }
 
   static const List<_NavDestination> _destinations = [
     _NavDestination(Icons.link_outlined, Icons.link, 'Single'),
@@ -30,23 +52,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _NavDestination(Icons.folder_open_outlined, Icons.folder_open, 'My Files'),
     _NavDestination(Icons.settings_outlined, Icons.settings, 'Settings'),
   ];
-
-  Widget _bodyAt(int i) {
-    switch (i) {
-      case 0:
-        return const SingleScreen();
-      case 1:
-        return const PlaylistScreen();
-      case 2:
-        return const BatchScreen();
-      case 3:
-        return const FilesScreen();
-      case 4:
-        return SettingsScreen(themeController: widget.themeController);
-      default:
-        throw StateError('Unknown tab index $i');
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -69,7 +74,12 @@ class _HomeScreenState extends State<HomeScreen> {
                 width: 1,
                 color: Theme.of(context).colorScheme.outlineVariant,
               ),
-              Expanded(child: _bodyAt(_selectedIndex)),
+              Expanded(
+                child: IndexedStack(
+                  index: _selectedIndex,
+                  children: _screens,
+                ),
+              ),
             ],
           ),
         ),
@@ -80,7 +90,12 @@ class _HomeScreenState extends State<HomeScreen> {
         titleSpacing: 16,
         title: const D4MLogo(showText: true, size: 22),
       ),
-      body: SafeArea(child: _bodyAt(_selectedIndex)),
+      body: SafeArea(
+        child: IndexedStack(
+          index: _selectedIndex,
+          children: _screens,
+        ),
+      ),
       bottomNavigationBar: NavigationBar(
         selectedIndex: _selectedIndex,
         onDestinationSelected: (i) => setState(() => _selectedIndex = i),

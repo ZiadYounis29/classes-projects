@@ -5,25 +5,19 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/single_download_controller.dart';
 import '../models/download_progress.dart';
+import '../settings/app_settings.dart';
 import '../widgets/download_progress_view.dart';
+import '../widgets/format_dropdown.dart';
 import '../widgets/metadata_card.dart';
 import '../widgets/quality_dropdown.dart';
+import '../widgets/trim_input.dart';
 
 /// Single-URL download screen.
-///
-/// Flow:
-/// 1. User pastes a URL → presses Fetch.
-/// 2. Spinner while yt-dlp fetches metadata.
-/// 3. Metadata card + quality dropdown + Download button.
-/// 4. Progress card (live %/speed/ETA) + Cancel.
-/// 5. Success card (Open file / Open folder / New download)
-///    OR Error card (with retry).
 class SingleScreen extends StatefulWidget {
-  const SingleScreen({super.key, this.controller});
+  const SingleScreen({super.key, this.controller, this.appSettings});
 
-  /// Optional controller injection for tests. In production we instantiate
-  /// our own.
   final SingleDownloadController? controller;
+  final AppSettings? appSettings;
 
   @override
   State<SingleScreen> createState() => _SingleScreenState();
@@ -32,23 +26,36 @@ class SingleScreen extends StatefulWidget {
 class _SingleScreenState extends State<SingleScreen> {
   late final SingleDownloadController _controller;
   late final TextEditingController _urlController;
+  late final TextEditingController _filenameController;
   bool _ownsController = false;
 
   @override
   void initState() {
     super.initState();
     _urlController = TextEditingController();
+    _filenameController = TextEditingController();
     if (widget.controller != null) {
       _controller = widget.controller!;
     } else {
-      _controller = SingleDownloadController();
+      _controller = SingleDownloadController(appSettings: widget.appSettings);
       _ownsController = true;
+    }
+    // Sync the filename text field when the controller updates it
+    // (e.g. after metadata fetch or trim change).
+    _controller.addListener(_syncFilenameField);
+  }
+
+  void _syncFilenameField() {
+    if (_filenameController.text != _controller.customFilename) {
+      _filenameController.text = _controller.customFilename;
     }
   }
 
   @override
   void dispose() {
+    _controller.removeListener(_syncFilenameField);
     _urlController.dispose();
+    _filenameController.dispose();
     if (_ownsController) {
       _controller.dispose();
     }
@@ -112,6 +119,7 @@ class _SingleScreenState extends State<SingleScreen> {
         final progress = _controller.progress;
         final metadata = _controller.metadata;
         final selected = _controller.selectedFormat;
+        final selectedOutput = _controller.selectedOutputFormat;
         final isFetching = progress.phase == DownloadPhase.fetchingMetadata;
         final isDownloading = progress.phase == DownloadPhase.downloading;
 
@@ -142,6 +150,34 @@ class _SingleScreenState extends State<SingleScreen> {
                       enabled: !isDownloading,
                       onChanged: _controller.selectFormat,
                     ),
+                    const SizedBox(height: 12),
+                    FormatDropdown(
+                      selected: selectedOutput,
+                      isAudioOnly: selected?.isAudioOnly ?? false,
+                      enabled: !isDownloading,
+                      onChanged: _controller.selectOutputFormat,
+                    ),
+                    const SizedBox(height: 12),
+                    TrimInput(
+                      enabled: !isDownloading,
+                      videoDuration: metadata.duration,
+                      onChanged: (start, end) =>
+                          _controller.setTrim(start: start, end: end),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: _filenameController,
+                      enabled: !isDownloading,
+                      onChanged: (value) =>
+                          _controller.setCustomFilename(value),
+                      decoration: InputDecoration(
+                        labelText: 'File name',
+                        hintText: 'Enter custom file name',
+                        prefixIcon:
+                            const Icon(Icons.drive_file_rename_outline),
+                        suffixText: '.${_controller.selectedOutputFormat.ext}',
+                      ),
+                    ),
                     const SizedBox(height: 16),
                     if (progress.phase == DownloadPhase.ready)
                       Align(
@@ -157,6 +193,8 @@ class _SingleScreenState extends State<SingleScreen> {
                   DownloadProgressView(
                     progress: progress,
                     onCancel: _onCancel,
+                    onPause: _controller.pause,
+                    onResume: _controller.resume,
                     onOpenFile: () {
                       if (progress.outputPath != null) {
                         _openFile(progress.outputPath!);

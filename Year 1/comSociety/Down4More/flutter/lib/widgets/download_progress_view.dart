@@ -9,6 +9,8 @@ class DownloadProgressView extends StatelessWidget {
     super.key,
     required this.progress,
     required this.onCancel,
+    required this.onPause,
+    required this.onResume,
     required this.onOpenFile,
     required this.onOpenFolder,
     required this.onRetry,
@@ -17,6 +19,8 @@ class DownloadProgressView extends StatelessWidget {
 
   final DownloadProgress progress;
   final VoidCallback onCancel;
+  final VoidCallback onPause;
+  final VoidCallback onResume;
   final VoidCallback onOpenFile;
   final VoidCallback onOpenFolder;
   final VoidCallback onRetry;
@@ -26,7 +30,14 @@ class DownloadProgressView extends StatelessWidget {
   Widget build(BuildContext context) {
     switch (progress.phase) {
       case DownloadPhase.downloading:
-        return _DownloadingCard(progress: progress, onCancel: onCancel);
+        return _DownloadingCard(
+          progress: progress,
+          onCancel: onCancel,
+          onPause: onPause,
+          onResume: onResume,
+        );
+      case DownloadPhase.trimming:
+        return _TrimmingCard(progress: progress, onCancel: onCancel);
       case DownloadPhase.finished:
         return _FinishedCard(
           progress: progress,
@@ -47,15 +58,24 @@ class DownloadProgressView extends StatelessWidget {
 }
 
 class _DownloadingCard extends StatelessWidget {
-  const _DownloadingCard({required this.progress, required this.onCancel});
+  const _DownloadingCard({
+    required this.progress,
+    required this.onCancel,
+    required this.onPause,
+    required this.onResume,
+  });
   final DownloadProgress progress;
   final VoidCallback onCancel;
+  final VoidCallback onPause;
+  final VoidCallback onResume;
 
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final pct = progress.percent;
+    final paused = progress.paused;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -64,12 +84,120 @@ class _DownloadingCard extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(Icons.downloading, color: scheme.primary),
+                // Animated icon: spinning when active, static scissors when paused
+                paused
+                    ? Icon(Icons.pause_circle_outline, color: scheme.primary)
+                    : Icon(Icons.downloading, color: scheme.primary),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    paused
+                        ? (pct != null
+                            ? 'Paused — ${pct.toStringAsFixed(1)}%'
+                            : 'Paused')
+                        : (pct != null
+                            ? 'Downloading… ${pct.toStringAsFixed(1)}%'
+                            : 'Downloading…'),
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                // Pause / Resume toggle
+                TextButton.icon(
+                  onPressed: paused ? onResume : onPause,
+                  icon: Icon(paused ? Icons.play_arrow : Icons.pause),
+                  label: Text(paused ? 'Resume' : 'Pause'),
+                ),
+                TextButton.icon(
+                  onPressed: onCancel,
+                  icon: const Icon(Icons.close),
+                  label: const Text('Cancel'),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(6),
+              child: LinearProgressIndicator(
+                value: pct != null ? pct / 100 : null,
+                minHeight: 6,
+                backgroundColor: scheme.surfaceContainerHighest,
+                // Dim the bar colour when paused to reinforce the paused state.
+                color: paused ? scheme.primary.withValues(alpha: 0.45) : null,
+              ),
+            ),
+            const SizedBox(height: 10),
+            DefaultTextStyle.merge(
+              style: theme.textTheme.bodySmall?.copyWith(
+                color: scheme.onSurfaceVariant,
+              ),
+              child: Wrap(
+                spacing: 16,
+                runSpacing: 4,
+                children: [
+                  if (!paused && progress.speedBytesPerSecond != null)
+                    _StatChip(
+                      icon: Icons.speed_outlined,
+                      text: '${_formatBytes(progress.speedBytesPerSecond!.round())}/s',
+                    ),
+                  if (!paused && progress.eta != null)
+                    _StatChip(
+                      icon: Icons.schedule_outlined,
+                      text: 'ETA ${_formatDuration(progress.eta!)}',
+                    ),
+                  if (progress.totalBytes != null)
+                    _StatChip(
+                      icon: Icons.save_alt_outlined,
+                      text: _formatBytes(progress.totalBytes!),
+                    ),
+                  if (paused)
+                    _StatChip(
+                      icon: Icons.info_outline,
+                      text: 'Download paused — tap Resume to continue',
+                    ),
+                ],
+              ),
+            ),
+            if (progress.message != null && !paused) ...[
+              const SizedBox(height: 8),
+              Text(
+                progress.message!,
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _TrimmingCard extends StatelessWidget {
+  const _TrimmingCard({required this.progress, required this.onCancel});
+  final DownloadProgress progress;
+  final VoidCallback onCancel;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.content_cut_rounded, color: scheme.primary),
                 const SizedBox(width: 8),
                 Text(
-                  pct != null
-                      ? 'Downloading… ${pct.toStringAsFixed(1)}%'
-                      : 'Downloading…',
+                  'Trimming segment…',
                   style: theme.textTheme.titleMedium?.copyWith(
                     fontWeight: FontWeight.w600,
                   ),
@@ -86,49 +214,18 @@ class _DownloadingCard extends StatelessWidget {
             ClipRRect(
               borderRadius: BorderRadius.circular(6),
               child: LinearProgressIndicator(
-                value: pct != null ? pct / 100 : null,
+                value: null, // indeterminate — ffmpeg doesn't report %
                 minHeight: 6,
                 backgroundColor: scheme.surfaceContainerHighest,
               ),
             ),
-            const SizedBox(height: 10),
-            DefaultTextStyle.merge(
+            const SizedBox(height: 8),
+            Text(
+              progress.message ?? 'Running ffmpeg…',
               style: theme.textTheme.bodySmall?.copyWith(
                 color: scheme.onSurfaceVariant,
               ),
-              child: Wrap(
-                spacing: 16,
-                runSpacing: 4,
-                children: [
-                  if (progress.speedBytesPerSecond != null)
-                    _StatChip(
-                      icon: Icons.speed_outlined,
-                      text: '${_formatBytes(progress.speedBytesPerSecond!.round())}/s',
-                    ),
-                  if (progress.eta != null)
-                    _StatChip(
-                      icon: Icons.schedule_outlined,
-                      text: 'ETA ${_formatDuration(progress.eta!)}',
-                    ),
-                  if (progress.totalBytes != null)
-                    _StatChip(
-                      icon: Icons.save_alt_outlined,
-                      text: _formatBytes(progress.totalBytes!),
-                    ),
-                ],
-              ),
             ),
-            if (progress.message != null) ...[
-              const SizedBox(height: 8),
-              Text(
-                progress.message!,
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-              ),
-            ],
           ],
         ),
       ),

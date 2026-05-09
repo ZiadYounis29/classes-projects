@@ -3,8 +3,10 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
+import 'package:path/path.dart' as p;
 
 import '../models/download_progress.dart';
+import '../models/playlist_entry.dart';
 import '../models/video_metadata.dart';
 
 /// Thin wrapper around the `yt-dlp` CLI. Pure Dart, no UI deps — safe to
@@ -71,8 +73,66 @@ class YtDlpService {
     }
   }
 
+  /// Run `yt-dlp --flat-playlist --dump-json` to list all entries in a
+  /// playlist without downloading anything. Each line of stdout is a JSON
+  /// object describing one video.
+  ///
+  /// Throws [YtDlpException] on failure.
+  Future<List<PlaylistEntry>> fetchPlaylist(String url) async {
+    if (url.trim().isEmpty) {
+      throw YtDlpException('URL is empty.');
+    }
+    final args = <String>[
+      '--flat-playlist',
+      '--dump-json',
+      '--no-warnings',
+      url,
+    ];
+
+    final ProcessResult result;
+    try {
+      result = await _runner(_exe, args);
+    } on ProcessException catch (e) {
+      throw YtDlpException(
+        'yt-dlp not found at "$_exe". Install it with `pip install yt-dlp` '
+        'or apt/brew. Original error: ${e.message}',
+      );
+    }
+    if (result.exitCode != 0) {
+      final stderr = (result.stderr as String?)?.trim() ?? '';
+      throw YtDlpException(
+        stderr.isEmpty
+            ? 'yt-dlp exited with code ${result.exitCode}.'
+            : stderr,
+      );
+    }
+
+    final stdout = result.stdout as String;
+    final entries = <PlaylistEntry>[];
+    for (final line in stdout.trim().split('\n')) {
+      if (line.trim().isEmpty) continue;
+      try {
+        final json = jsonDecode(line) as Map<String, dynamic>;
+        final entry = PlaylistEntry.fromJson(json);
+        if (entry.url.isNotEmpty) entries.add(entry);
+      } catch (_) {
+        continue;
+      }
+    }
+    return entries;
+  }
+
   /// Start an actual download. Returns a [DownloadHandle] you can listen to
   /// for [DownloadProgress] events and call [DownloadHandle.cancel] on.
+  ///
+  /// [outputExt] is the desired container/codec extension chosen by the user,
+  /// e.g. 'mp4', 'mkv', 'mp3', 'm4a'. When [format] is audio-only the
+  /// service switches to -x --audio-format mode automatically.
+  ///
+  /// [trimStart] / [trimEnd] are optional segment boundaries. When either is
+  /// provided the service downloads to a hidden temp file first, then runs
+  /// ffmpeg to cut the segment into the final file and deletes the temp.
+  /// Requires ffmpeg on PATH.
   ///
   /// The returned stream completes (closes) once yt-dlp exits, regardless of
   /// success/failure/cancel. Listen for the terminal phase event and update
@@ -81,22 +141,46 @@ class YtDlpService {
     required VideoMetadata metadata,
     required VideoFormat format,
     required String outputDir,
+    String outputExt = 'mp4',
     String outputTemplate = '%(title).200B [%(id)s].%(ext)s',
+    String? customFilename,
+    Duration? trimStart,
+    Duration? trimEnd,
+    String? rateLimit,
   }) {
     final controller = StreamController<DownloadProgress>.broadcast();
     final processCompleter = Completer<Process>();
     final state = _DownloadState();
+
+    final bool isTrimming = trimStart != null || trimEnd != null;
+
+    // yt-dlp handles audio-only differently from video:
+    //   video: --merge-output-format <ext>  (remux after muxing streams)
+    //   audio: -x --audio-format <ext>      (extract + transcode)
+    // 'ogg' is a container not a codec — yt-dlp needs 'vorbis' internally.
+    final bool isAudio = format.isAudioOnly;
+    final String ytdlpAudioFmt = outputExt == 'ogg' ? 'vorbis' : outputExt;
+
+    // When trimming we download to a temp file so ffmpeg can read it cleanly.
+    // The temp name uses a fixed prefix so it can be found and deleted on error.
+    final String effectiveTemplate;
+    if (isTrimming) {
+      effectiveTemplate = '_d4m_temp_${DateTime.now().millisecondsSinceEpoch}.%(ext)s';
+    } else if (customFilename != null && customFilename.isNotEmpty) {
+      effectiveTemplate = '${_sanitizeFilename(customFilename)}.%(ext)s';
+    } else {
+      effectiveTemplate = outputTemplate;
+    }
 
     final args = <String>[
       '--newline',
       '--no-playlist',
       '--no-warnings',
       '-f', format.id,
-      // Always remux problematic codecs into mp4 so the output file actually
-      // plays in OS-default players (Linux Files / macOS Finder Quick Look).
-      // Audio-only stays as m4a.
-      if (!format.isAudioOnly) ...['--merge-output-format', 'mp4'],
-      '-o', '$outputDir/$outputTemplate',
+      if (isAudio) ...['-x', '--audio-format', ytdlpAudioFmt]
+      else ...['--merge-output-format', outputExt],
+      if (rateLimit != null && rateLimit.isNotEmpty) ...['--rate-limit', rateLimit],
+      '-o', p.join(outputDir, effectiveTemplate),
       metadata.url,
     ];
 
@@ -128,8 +212,49 @@ class YtDlpService {
         if (progress.outputPath != null) {
           state.outputPath = progress.outputPath;
         }
-        controller.add(progress);
+        if (progress.percent != null) {
+          state.lastPercent = progress.percent;
+        }
+        // Carry the paused flag through so the UI stays correct while
+        // progress lines trickle in from the buffer during a pause.
+        if (state.paused) {
+          controller.add(DownloadProgress(
+            phase: progress.phase,
+            paused: true,
+            percent: progress.percent,
+            speedBytesPerSecond: null,
+            eta: null,
+            totalBytes: progress.totalBytes,
+            outputPath: progress.outputPath,
+            message: 'Paused',
+          ));
+        } else {
+          controller.add(progress);
+        }
       });
+
+      // Give the handle a way to pause/resume the stdout subscription.
+      // Pausing the subscription stops us reading from the pipe; the OS
+      // buffer (~64 KB) fills up quickly and yt-dlp stalls by itself —
+      // no SIGSTOP/SIGCONT, works identically on Windows, Linux, Android.
+      state.pauseCallback  = () {
+        stdoutSub.pause();
+        controller.add(DownloadProgress(
+          phase: DownloadPhase.downloading,
+          paused: true,
+          percent: state.lastPercent,
+          message: 'Paused',
+        ));
+      };
+      state.resumeCallback = () {
+        stdoutSub.resume();
+        controller.add(DownloadProgress(
+          phase: DownloadPhase.downloading,
+          paused: false,
+          percent: state.lastPercent,
+          message: 'Resuming…',
+        ));
+      };
 
       final stderrBuf = StringBuffer();
       final stderrSub = process.stderr
@@ -140,18 +265,16 @@ class YtDlpService {
       await stdoutSub.cancel();
       await stderrSub.cancel();
 
-      if (code == 0) {
-        controller.add(
-          DownloadProgress(
-            phase: DownloadPhase.finished,
-            percent: 100,
-            outputPath: state.outputPath,
-            message: 'Saved.',
-          ),
-        );
-      } else if (state.cancelled) {
+      if (state.cancelled) {
+        // Clean up any partial temp file.
+        _deleteTempFile(state.outputPath);
         controller.add(const DownloadProgress(phase: DownloadPhase.cancelled));
-      } else {
+        await controller.close();
+        return;
+      }
+
+      if (code != 0) {
+        _deleteTempFile(state.outputPath);
         controller.add(
           DownloadProgress(
             phase: DownloadPhase.error,
@@ -160,7 +283,103 @@ class YtDlpService {
                 : stderrBuf.toString().trim(),
           ),
         );
+        await controller.close();
+        return;
       }
+
+      // ── Phase 2: ffmpeg trim (only when start/end was requested) ──────────
+      if (isTrimming) {
+        final tempPath = state.outputPath;
+        if (tempPath == null || !File(tempPath).existsSync()) {
+          controller.add(
+            const DownloadProgress(
+              phase: DownloadPhase.error,
+              errorMessage:
+                  'Trim failed: could not locate the downloaded temp file.',
+            ),
+          );
+          await controller.close();
+          return;
+        }
+
+        controller.add(
+          const DownloadProgress(
+            phase: DownloadPhase.trimming,
+            message: 'Trimming segment with ffmpeg…',
+          ),
+        );
+
+        final tempExt = p.extension(tempPath); // includes the dot
+        // Use custom filename if provided, otherwise auto-generate from
+        // the video title + trim range.
+        final String finalName;
+        if (customFilename != null && customFilename.isNotEmpty) {
+          finalName = _sanitizeFilename(customFilename);
+        } else {
+          final safeTitle = _sanitizeFilename(metadata.title);
+          final startStr = _formatTrimRange(trimStart ?? Duration.zero);
+          final endStr = _formatTrimRange(trimEnd ?? metadata.duration ?? Duration.zero);
+          finalName = '$safeTitle [$startStr-$endStr]';
+        }
+        final finalPath = p.join(outputDir, '$finalName$tempExt');
+
+        final ffmpegArgs = _buildFfmpegArgs(
+          inputPath: tempPath,
+          outputPath: finalPath,
+          start: trimStart,
+          end: trimEnd,
+        );
+
+        final ffResult = await _runner('ffmpeg', ffmpegArgs);
+
+        // Delete the temp file regardless of ffmpeg outcome.
+        _deleteTempFile(tempPath);
+
+        if (state.cancelled) {
+          _deleteTempFile(finalPath);
+          controller.add(
+            const DownloadProgress(phase: DownloadPhase.cancelled),
+          );
+          await controller.close();
+          return;
+        }
+
+        if (ffResult.exitCode != 0) {
+          final ffErr = (ffResult.stderr as String?)?.trim() ?? '';
+          controller.add(
+            DownloadProgress(
+              phase: DownloadPhase.error,
+              errorMessage: ffErr.isEmpty
+                  ? 'ffmpeg exited with code ${ffResult.exitCode}. '
+                    'Make sure ffmpeg is installed.'
+                  : 'ffmpeg error: $ffErr',
+            ),
+          );
+          await controller.close();
+          return;
+        }
+
+        controller.add(
+          DownloadProgress(
+            phase: DownloadPhase.finished,
+            percent: 100,
+            outputPath: finalPath,
+            message: 'Saved.',
+          ),
+        );
+        await controller.close();
+        return;
+      }
+
+      // ── No trim: done ─────────────────────────────────────────────────────
+      controller.add(
+        DownloadProgress(
+          phase: DownloadPhase.finished,
+          percent: 100,
+          outputPath: state.outputPath,
+          message: 'Saved.',
+        ),
+      );
       await controller.close();
     }
 
@@ -170,26 +389,103 @@ class YtDlpService {
       stream: controller.stream,
       processFuture: processCompleter.future,
       onCancel: () => state.cancelled = true,
+      onPause:  () {
+        state.paused = true;
+        state.pauseCallback?.call();
+      },
+      onResume: () {
+        state.paused = false;
+        state.resumeCallback?.call();
+      },
     );
   }
 }
 
-/// Mutable state shared between the spawn closure and the cancel callback.
+// ── Module-level helpers ─────────────────────────────────────────────────────
+
+/// Build the ffmpeg argument list for a segment cut.
+/// Uses stream-copy (-c copy) so no re-encoding — fast and lossless.
+/// -y overwrites without prompting; -loglevel error suppresses noise.
+List<String> _buildFfmpegArgs({
+  required String inputPath,
+  required String outputPath,
+  Duration? start,
+  Duration? end,
+}) {
+  return [
+    '-y',
+    '-loglevel', 'error',
+    if (start != null) ...[ '-ss', _durToFfmpeg(start) ],
+    '-i', inputPath,
+    // When -ss is before -i (input seeking), -to is relative to the seeked
+    // position, not the original file. Use -t (duration) instead so that
+    // start=1:00 end=2:00 produces a 1-minute clip, not a 2-minute one.
+    if (end != null && start != null) ...[ '-t', _durToFfmpeg(end - start) ]
+    else if (end != null) ...[ '-to', _durToFfmpeg(end) ],
+    '-c', 'copy',
+    outputPath,
+  ];
+}
+
+/// Format a [Duration] as `HH:MM:SS.mmm` for ffmpeg -ss / -to arguments.
+String _durToFfmpeg(Duration d) {
+  final h = d.inHours.toString().padLeft(2, '0');
+  final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  final ms = (d.inMilliseconds.remainder(1000)).toString().padLeft(3, '0');
+  return '$h:$m:$s.$ms';
+}
+
+/// Replace filesystem-unsafe characters with underscores.
+String _sanitizeFilename(String name) {
+  return name.replaceAll(RegExp(r'[<>:"/\\|?*]'), '_').trim();
+}
+
+/// Format a Duration as a compact trim-range label, e.g. `01m30s`.
+String _formatTrimRange(Duration d) {
+  final h = d.inHours;
+  final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  if (h > 0) return '${h}h${m}m${s}s';
+  return '${m}m${s}s';
+}
+
+/// Best-effort temp file deletion. Swallows errors — if the file is already
+/// gone or locked we don't want to mask the real error.
+void _deleteTempFile(String? path) {
+  if (path == null) return;
+  try {
+    final f = File(path);
+    if (f.existsSync()) f.deleteSync();
+  } catch (_) {}
+}
+
+
 /// Lives outside [YtDlpService.download] only because Dart doesn't let a
 /// closure capture local variables by reference for assignment.
 class _DownloadState {
   bool cancelled = false;
+  bool paused    = false;
   String? outputPath;
+  double? lastPercent;
+
+  /// Set by [YtDlpService.download] once the stdout subscription exists.
+  void Function()? pauseCallback;
+  void Function()? resumeCallback;
 }
 
 /// Handle returned from [YtDlpService.download]. Lets the controller listen
-/// for progress events and ask the underlying process to terminate.
+/// for progress events and ask the underlying process to terminate or pause.
 class DownloadHandle {
   DownloadHandle._({
     required this.stream,
     required this.processFuture,
     required void Function() onCancel,
-  }) : _onCancel = onCancel;
+    required void Function() onPause,
+    required void Function() onResume,
+  })  : _onCancel = onCancel,
+        _onPause  = onPause,
+        _onResume = onResume;
 
   /// One [DownloadProgress] per stdout line + one terminal phase event
   /// (finished / error / cancelled). Closes when the subprocess exits.
@@ -200,15 +496,38 @@ class DownloadHandle {
   final Future<Process> processFuture;
 
   final void Function() _onCancel;
+  final void Function() _onPause;
+  final void Function() _onResume;
   bool _cancelled = false;
+  bool _paused    = false;
 
   bool get isCancelled => _cancelled;
+  bool get isPaused    => _paused;
+
+  /// Suspend the stdout read loop so yt-dlp stalls naturally.
+  void pause() {
+    if (_cancelled || _paused) return;
+    _paused = true;
+    _onPause();
+  }
+
+  /// Resume reading stdout — yt-dlp resumes downloading immediately.
+  void resume() {
+    if (_cancelled || !_paused) return;
+    _paused = false;
+    _onResume();
+  }
 
   /// Send SIGTERM (or kill on Windows) to the running yt-dlp process. The
   /// stream will then emit a [DownloadPhase.cancelled] event and close.
   Future<void> cancel() async {
     if (_cancelled) return;
     _cancelled = true;
+    // If paused, resume the subscription first so the process exit is read.
+    if (_paused) {
+      _paused = false;
+      _onResume();
+    }
     _onCancel();
     try {
       final p = await processFuture;
