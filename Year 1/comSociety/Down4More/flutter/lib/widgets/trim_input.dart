@@ -412,7 +412,14 @@ class DigitShiftFormatter extends TextInputFormatter {
     TextEditingValue oldValue,
     TextEditingValue newValue,
   ) {
-    final digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+    final raw = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+    // The formatter pads its display with leading zeros (`5` → `0:05`), so
+    // when the previous text is fed back in on the next keystroke those
+    // padding zeros would be re-absorbed as real digits. That widens
+    // intermediate states beyond what the user actually typed (`5,5` ends
+    // up as `00:55` instead of `0:55`). Drop a single run of leading zeros
+    // so the digit count tracks the user's keystrokes.
+    final digits = raw.replaceFirst(RegExp(r'^0+'), '');
     final capped = digits.length > 6
         ? digits.substring(digits.length - 6)
         : digits;

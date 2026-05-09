@@ -227,10 +227,17 @@ class QueueItemRow extends StatelessWidget {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         // Quality dropdown — compact form.
+        // Width is 260 (was 220) and `isExpanded: true` so the selected
+        // value plus its size suffix (e.g. `Best available · 301 MB`) lays
+        // out inside the dropdown's content area instead of overflowing
+        // past the trailing arrow. Without isExpanded the InputDecoration
+        // sized the inner Row to its intrinsic width and hit a 160 px
+        // constraint that clipped long labels with a yellow/black stripe.
         SizedBox(
-          width: 220,
+          width: 260,
           child: DropdownButtonFormField<String>(
             isDense: true,
+            isExpanded: true,
             value: selectedFormat.id,
             decoration: const InputDecoration(
               labelText: 'Quality',
@@ -268,9 +275,10 @@ class QueueItemRow extends StatelessWidget {
         ),
         // Format dropdown — compact form.
         SizedBox(
-          width: 220,
+          width: 260,
           child: DropdownButtonFormField<String>(
             isDense: true,
+            isExpanded: true,
             value: selectedOutput.ext,
             decoration: const InputDecoration(
               labelText: 'Format',

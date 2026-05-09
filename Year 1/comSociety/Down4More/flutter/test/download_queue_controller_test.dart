@@ -69,6 +69,40 @@ void main() {
       expect(item.previewError, isNull);
     });
 
+    test('previewItem replaces "Unknown" placeholder titles', () async {
+      // Reproduces F2 from PR #5 testing: flat-playlist preview can deliver
+      // entries with title="Unknown" (e.g. Vimeo showcases). Without this
+      // guard the row title would stay at "Unknown" forever even after the
+      // per-item preview fetched the real title.
+      final q = _makeQueue();
+      q.addEntries([
+        (
+          url: 'https://a.example/v1',
+          title: 'Unknown',
+          thumbnailUrl: null,
+        ),
+      ]);
+      await q.previewItem(q.items.single);
+      expect(q.items.single.title, 'Fake video',
+          reason: 'placeholder "Unknown" should be replaced with metadata title');
+    });
+
+    test('previewItem keeps an existing real title intact', () async {
+      // Inverse check: when the playlist preview already gave us a real
+      // title, the per-item fetch must NOT clobber it (yt-dlp metadata can
+      // sometimes contain a slightly different/shorter title).
+      final q = _makeQueue();
+      q.addEntries([
+        (
+          url: 'https://a.example/v1',
+          title: 'My personalised title',
+          thumbnailUrl: null,
+        ),
+      ]);
+      await q.previewItem(q.items.single);
+      expect(q.items.single.title, 'My personalised title');
+    });
+
     test('previewItem captures yt-dlp errors as previewError', () async {
       final svc = YtDlpService(
         executable: 'fake-yt-dlp',

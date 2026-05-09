@@ -287,8 +287,18 @@ class DownloadQueueController extends ChangeNotifier {
     try {
       final m = await _service.fetchMetadata(item.url);
       item.metadata = m;
-      // Adopt richer info from yt-dlp into the row preview.
-      if (item.title == item.url || item.title.trim().isEmpty) {
+      // Adopt richer info from yt-dlp into the row preview. The replace
+      // guard has to cover three cases:
+      //   1) initial title === url (set by addUrls when no title is known)
+      //   2) empty / whitespace title
+      //   3) flat-playlist placeholders ("Unknown", "Unknown title") that
+      //      yt-dlp returns when the playlist preview lacks per-entry
+      //      titles — common on Vimeo showcases.
+      // Without case 3 the row title would stay as "Unknown" even after
+      // the per-item preview has fetched the real title.
+      const placeholders = {'Unknown', 'Unknown title', 'NA'};
+      final t = item.title.trim();
+      if (t.isEmpty || t == item.url || placeholders.contains(t)) {
         item.title = m.title;
       }
       item.thumbnailUrl ??= m.thumbnailUrl;
