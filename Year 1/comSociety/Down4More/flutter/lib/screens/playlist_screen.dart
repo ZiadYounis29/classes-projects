@@ -2,10 +2,17 @@ import 'package:flutter/material.dart';
 
 import '../controllers/download_queue_controller.dart';
 import '../controllers/playlist_controller.dart';
-import '../models/download_progress.dart';
+import '../models/output_format.dart';
 import '../settings/app_settings.dart';
+import '../widgets/queue_item_row.dart';
 
 /// Playlist download screen.
+///
+/// Three phases:
+///   1. URL input → Fetch
+///   2. Selecting which entries to download (checkbox list)
+///   3. Configuring + downloading the queue (per-item dropdowns,
+///      per-item speed/size/cancel/retry, group-folder toggle)
 class PlaylistScreen extends StatefulWidget {
   const PlaylistScreen({super.key, required this.appSettings});
   final AppSettings appSettings;
@@ -17,18 +24,38 @@ class PlaylistScreen extends StatefulWidget {
 class _PlaylistScreenState extends State<PlaylistScreen> {
   late final PlaylistController _playlistCtrl;
   late final TextEditingController _urlCtrl;
+  late final TextEditingController _folderCtrl;
   DownloadQueueController? _queueCtrl;
+
+  /// `true` once the user clicks "Start download". Distinguishes the
+  /// configure stage (per-item dropdowns visible, no progress yet) from the
+  /// running/done stage (progress bars + per-item cancel/retry visible).
+  bool _started = false;
+
+  /// Default output format applied to every queue item. Per-item dropdowns
+  /// can override.
+  OutputFormat _globalOutput = kDefaultVideoFormat;
 
   @override
   void initState() {
     super.initState();
     _playlistCtrl = PlaylistController();
     _urlCtrl = TextEditingController();
+    _folderCtrl = TextEditingController();
+    _globalOutput = _findFormat(widget.appSettings.defaultFormat);
+  }
+
+  OutputFormat _findFormat(String ext) {
+    for (final f in [...kVideoFormats, ...kAudioFormats]) {
+      if (f.ext == ext) return f;
+    }
+    return kDefaultVideoFormat;
   }
 
   @override
   void dispose() {
     _urlCtrl.dispose();
+    _folderCtrl.dispose();
     _playlistCtrl.dispose();
     _queueCtrl?.dispose();
     super.dispose();
@@ -40,19 +67,40 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     FocusScope.of(context).unfocus();
     _queueCtrl?.dispose();
     _queueCtrl = null;
+    _started = false;
     await _playlistCtrl.fetchPlaylist(url);
   }
 
-  void _onDownloadSelected() {
+  void _onContinueWithSelected() {
     final entries = _playlistCtrl.selectedEntries;
     if (entries.isEmpty) return;
 
     _queueCtrl?.dispose();
-    _queueCtrl = DownloadQueueController(appSettings: widget.appSettings);
-    _queueCtrl!.addEntries(entries);
-    _queueCtrl!.addListener(_onQueueUpdate);
-    _queueCtrl!.startAll();
+    final q = DownloadQueueController(appSettings: widget.appSettings);
+    q.addEntries(entries);
+    q.setGlobalOutputFormat(_globalOutput);
+
+    // Default group-folder ON for playlists, prefilled with playlist title.
+    final folderName =
+        _playlistCtrl.playlistTitle?.trim().isNotEmpty == true
+            ? _playlistCtrl.playlistTitle!
+            : 'Playlist';
+    _folderCtrl.text = folderName;
+    q.setGroupFolder(enabled: true, name: folderName);
+
+    q.addListener(_onQueueUpdate);
+    _queueCtrl = q;
+    _started = false;
     setState(() {});
+  }
+
+  void _onStartDownload() {
+    final q = _queueCtrl;
+    if (q == null) return;
+    q.setGroupFolder(enabled: q.groupFolderEnabled, name: _folderCtrl.text);
+    _started = true;
+    setState(() {});
+    q.startAll();
   }
 
   void _onQueueUpdate() {
@@ -63,7 +111,16 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     _playlistCtrl.reset();
     _queueCtrl?.dispose();
     _queueCtrl = null;
+    _started = false;
     _urlCtrl.clear();
+    _folderCtrl.clear();
+    setState(() {});
+  }
+
+  void _onBackToSelect() {
+    _queueCtrl?.dispose();
+    _queueCtrl = null;
+    _started = false;
     setState(() {});
   }
 
@@ -74,7 +131,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
       builder: (context, _) {
         final phase = _playlistCtrl.phase;
         final isFetching = phase == PlaylistPhase.fetching;
-        final isDownloading = _queueCtrl?.isRunning == true;
+        final hasQueue = _queueCtrl != null;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(20),
@@ -86,23 +143,18 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 children: [
                   _buildHeader(context),
                   const SizedBox(height: 20),
-                  _buildUrlRow(context, isFetching, isDownloading),
+                  _buildUrlRow(context, isFetching, hasQueue),
                   if (phase == PlaylistPhase.error) ...[
                     const SizedBox(height: 16),
                     _buildErrorBanner(context),
                   ],
-                  if (phase == PlaylistPhase.ready && _queueCtrl == null) ...[
+                  if (phase == PlaylistPhase.ready && !hasQueue) ...[
                     const SizedBox(height: 16),
                     _buildSelectionBar(context),
                     const SizedBox(height: 8),
                     _buildEntryList(context),
                   ],
-                  if (_queueCtrl != null) ...[
-                    const SizedBox(height: 16),
-                    _buildQueueSummary(context),
-                    const SizedBox(height: 8),
-                    _buildQueueItems(context),
-                  ],
+                  if (hasQueue) _buildQueueSection(context),
                 ],
               ),
             ),
@@ -126,8 +178,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
         ),
         const SizedBox(height: 4),
         Text(
-          'Paste a playlist URL, pick which videos you want, '
-          'and download them all at once.',
+          'Paste a playlist URL, pick which videos you want, customize '
+          'quality and format per video, then download them all at once.',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: scheme.onSurfaceVariant,
           ),
@@ -137,8 +189,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   }
 
   Widget _buildUrlRow(
-      BuildContext context, bool isFetching, bool isDownloading) {
-    final enabled = !isFetching && !isDownloading;
+      BuildContext context, bool isFetching, bool hasQueue) {
+    final enabled = !isFetching && !hasQueue;
     return Row(
       children: [
         Expanded(
@@ -219,9 +271,9 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
             ),
             const SizedBox(width: 8),
             FilledButton.icon(
-              onPressed: selected > 0 ? _onDownloadSelected : null,
-              icon: const Icon(Icons.download_rounded),
-              label: Text('Download ($selected)'),
+              onPressed: selected > 0 ? _onContinueWithSelected : null,
+              icon: const Icon(Icons.arrow_forward),
+              label: Text('Continue ($selected)'),
             ),
           ],
         ),
@@ -319,10 +371,237 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     );
   }
 
-  Widget _buildQueueSummary(BuildContext context) {
+  Widget _buildQueueSection(BuildContext context) {
+    final q = _queueCtrl!;
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
-    final queue = _queueCtrl!;
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        const SizedBox(height: 16),
+        if (!_started)
+          _ConfigureCard(
+            queue: q,
+            globalOutput: _globalOutput,
+            onGlobalOutputChanged: (f) {
+              setState(() => _globalOutput = f);
+              q.setGlobalOutputFormat(f);
+            },
+            folderCtrl: _folderCtrl,
+            onGroupFolderToggle: (v) {
+              q.setGroupFolder(enabled: v, name: _folderCtrl.text);
+            },
+            onStartDownload: _onStartDownload,
+            onBack: _onBackToSelect,
+          )
+        else
+          _RunningCard(
+            queue: q,
+            onReset: _onReset,
+          ),
+        const SizedBox(height: 8),
+        // Per-item rows.
+        for (int i = 0; i < q.items.length; i++)
+          _PreviewableRow(
+            item: q.items[i],
+            queue: q,
+            index: i,
+            // Lazy-fetch metadata for playlist items only when their card is
+            // first built and the user hasn't started downloading yet. This
+            // avoids hammering yt-dlp with N preview calls for huge playlists.
+            autoPreview: !_started,
+          ),
+        if (!_started && q.items.isEmpty) ...[
+          const SizedBox(height: 12),
+          Text(
+            'Queue is empty.',
+            style: theme.textTheme.bodyMedium?.copyWith(
+              color: scheme.onSurfaceVariant,
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Wraps [QueueItemRow] with auto-preview on first build (lazy fetch).
+class _PreviewableRow extends StatefulWidget {
+  const _PreviewableRow({
+    required this.item,
+    required this.queue,
+    required this.index,
+    required this.autoPreview,
+  });
+
+  final QueueItem item;
+  final DownloadQueueController queue;
+  final int index;
+  final bool autoPreview;
+
+  @override
+  State<_PreviewableRow> createState() => _PreviewableRowState();
+}
+
+class _PreviewableRowState extends State<_PreviewableRow> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.autoPreview) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        widget.queue.previewItem(widget.item);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return QueueItemRow(
+      item: widget.item,
+      queue: widget.queue,
+      index: widget.index,
+    );
+  }
+}
+
+/// Card shown above the queue while the user is configuring (pre-start).
+class _ConfigureCard extends StatelessWidget {
+  const _ConfigureCard({
+    required this.queue,
+    required this.globalOutput,
+    required this.onGlobalOutputChanged,
+    required this.folderCtrl,
+    required this.onGroupFolderToggle,
+    required this.onStartDownload,
+    required this.onBack,
+  });
+
+  final DownloadQueueController queue;
+  final OutputFormat globalOutput;
+  final ValueChanged<OutputFormat> onGlobalOutputChanged;
+  final TextEditingController folderCtrl;
+  final ValueChanged<bool> onGroupFolderToggle;
+  final VoidCallback onStartDownload;
+  final VoidCallback onBack;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.tune, color: scheme.primary),
+                const SizedBox(width: 8),
+                Text(
+                  'Configure download (${queue.items.length} videos)',
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            // Global format dropdown — applies to every item, but per-item
+            // dropdowns can override.
+            DropdownButtonFormField<String>(
+              isDense: true,
+              value: globalOutput.ext,
+              decoration: const InputDecoration(
+                labelText: 'Default format for all videos',
+                prefixIcon: Icon(Icons.movie_outlined),
+              ),
+              items: [
+                for (final f in [...kVideoFormats, ...kAudioFormats])
+                  DropdownMenuItem(value: f.ext, child: Text(f.label)),
+              ],
+              onChanged: (ext) {
+                if (ext == null) return;
+                final f = [...kVideoFormats, ...kAudioFormats]
+                    .firstWhere((x) => x.ext == ext);
+                onGlobalOutputChanged(f);
+              },
+            ),
+            const SizedBox(height: 12),
+            // Group-folder toggle.
+            ListenableBuilder(
+              listenable: queue,
+              builder: (_, __) => Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    value: queue.groupFolderEnabled,
+                    onChanged: onGroupFolderToggle,
+                    title: const Text('Save into a subfolder'),
+                    subtitle: Text(
+                      queue.groupFolderEnabled
+                          ? 'Files go into Down4More / <subfolder>'
+                          : 'Files go directly into Down4More',
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: scheme.onSurfaceVariant,
+                      ),
+                    ),
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  if (queue.groupFolderEnabled)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6),
+                      child: TextField(
+                        controller: folderCtrl,
+                        decoration: const InputDecoration(
+                          labelText: 'Folder name',
+                          isDense: true,
+                          prefixIcon: Icon(Icons.folder_outlined),
+                        ),
+                        onChanged: (v) =>
+                            queue.setGroupFolder(enabled: true, name: v),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                TextButton.icon(
+                  onPressed: onBack,
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Back to selection'),
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed: queue.items.isEmpty ? null : onStartDownload,
+                  icon: const Icon(Icons.download_rounded),
+                  label: Text('Start download (${queue.items.length})'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+/// Card shown above the queue once download has started.
+class _RunningCard extends StatelessWidget {
+  const _RunningCard({required this.queue, required this.onReset});
+  final DownloadQueueController queue;
+  final VoidCallback onReset;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
     final done = queue.finishedCount;
     final total = queue.totalCount;
     final errors = queue.errorCount;
@@ -400,7 +679,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                   ),
                 if (!queue.isRunning)
                   TextButton.icon(
-                    onPressed: _onReset,
+                    onPressed: onReset,
                     icon: const Icon(Icons.arrow_back),
                     label: const Text('New playlist'),
                   ),
@@ -410,106 +689,6 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
         ),
       ),
     );
-  }
-
-  Widget _buildQueueItems(BuildContext context) {
-    final theme = Theme.of(context);
-    final scheme = theme.colorScheme;
-    final items = _queueCtrl!.items;
-
-    return Column(
-      children: [
-        for (int i = 0; i < items.length; i++)
-          Card(
-            margin: const EdgeInsets.only(bottom: 4),
-            child: Padding(
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-              child: Row(
-                children: [
-                  _phaseIcon(items[i].progress.phase, scheme),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          items[i].title,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        if (items[i].progress.phase ==
-                            DownloadPhase.downloading)
-                          Padding(
-                            padding: const EdgeInsets.only(top: 4),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(4),
-                              child: LinearProgressIndicator(
-                                value: items[i].progress.percent != null
-                                    ? items[i].progress.percent! / 100
-                                    : null,
-                                minHeight: 4,
-                                backgroundColor:
-                                    scheme.surfaceContainerHighest,
-                              ),
-                            ),
-                          ),
-                        if (items[i].progress.phase == DownloadPhase.error &&
-                            items[i].progress.errorMessage != null)
-                          Text(
-                            items[i].progress.errorMessage!,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: theme.textTheme.bodySmall?.copyWith(
-                              color: scheme.error,
-                            ),
-                          ),
-                      ],
-                    ),
-                  ),
-                  if (items[i].progress.percent != null &&
-                      items[i].progress.phase == DownloadPhase.downloading)
-                    Text(
-                      '${items[i].progress.percent!.toStringAsFixed(0)}%',
-                      style: theme.textTheme.bodySmall?.copyWith(
-                        fontWeight: FontWeight.w600,
-                        color: scheme.primary,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _phaseIcon(DownloadPhase phase, ColorScheme scheme) {
-    switch (phase) {
-      case DownloadPhase.idle:
-        return Icon(Icons.hourglass_empty,
-            size: 18, color: scheme.onSurfaceVariant);
-      case DownloadPhase.fetchingMetadata:
-      case DownloadPhase.downloading:
-      case DownloadPhase.trimming:
-        return SizedBox(
-          width: 18,
-          height: 18,
-          child: CircularProgressIndicator(
-              strokeWidth: 2, color: scheme.primary),
-        );
-      case DownloadPhase.ready:
-        return Icon(Icons.download, size: 18, color: scheme.primary);
-      case DownloadPhase.finished:
-        return Icon(Icons.check_circle, size: 18, color: scheme.primary);
-      case DownloadPhase.error:
-        return Icon(Icons.error, size: 18, color: scheme.error);
-      case DownloadPhase.cancelled:
-        return Icon(Icons.cancel, size: 18, color: scheme.onSurfaceVariant);
-    }
   }
 }
 

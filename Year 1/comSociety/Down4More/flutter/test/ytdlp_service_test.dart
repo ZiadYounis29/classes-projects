@@ -139,4 +139,47 @@ void main() {
       expect(spawned, 0);
     });
   });
+
+  group('YtDlpService.getPlaylistTitle', () {
+    test('returns the first non-empty stdout line', () async {
+      final svc = YtDlpService(
+        executable: 'fake-yt-dlp',
+        processRunner: (exe, args) async =>
+            ProcessResult(0, 0, 'Lo-fi study mix\n', ''),
+      );
+      final title = await svc.getPlaylistTitle('https://example.com/p');
+      expect(title, 'Lo-fi study mix');
+    });
+
+    test('returns null when yt-dlp prints empty / NA', () async {
+      final svc = YtDlpService(
+        executable: 'fake-yt-dlp',
+        processRunner: (exe, args) async =>
+            ProcessResult(0, 0, '\nNA\n   \n', ''),
+      );
+      expect(await svc.getPlaylistTitle('https://x'), isNull);
+    });
+
+    test('returns null on empty input without spawning', () async {
+      var spawned = 0;
+      final svc = YtDlpService(
+        executable: 'fake-yt-dlp',
+        processRunner: (_, __) async {
+          spawned++;
+          return ProcessResult(0, 0, 'X', '');
+        },
+      );
+      expect(await svc.getPlaylistTitle('   '), isNull);
+      expect(spawned, 0);
+    });
+
+    test('returns null instead of throwing on yt-dlp failure', () async {
+      final svc = YtDlpService(
+        executable: 'fake-yt-dlp',
+        processRunner: (exe, args) async =>
+            ProcessResult(0, 1, '', 'Some error'),
+      );
+      expect(await svc.getPlaylistTitle('https://x'), isNull);
+    });
+  });
 }

@@ -25,12 +25,19 @@ class PlaylistController extends ChangeNotifier {
   List<PlaylistEntry> _entries = [];
   final Set<int> _selected = {};
   String? _errorMessage;
+  String? _playlistTitle;
 
   PlaylistPhase get phase => _phase;
   List<PlaylistEntry> get entries => List.unmodifiable(_entries);
   Set<int> get selectedIndices => Set.unmodifiable(_selected);
   String? get errorMessage => _errorMessage;
   int get selectedCount => _selected.length;
+
+  /// The playlist's own title (e.g. "Lo-fi study mix"). Fetched in parallel
+  /// with [fetchPlaylist] via `yt-dlp --print %(playlist_title)s`. Used to
+  /// seed the group-folder name in the Playlist screen — the user can
+  /// override it before downloading.
+  String? get playlistTitle => _playlistTitle;
 
   bool isSelected(int index) => _selected.contains(index);
 
@@ -56,16 +63,21 @@ class PlaylistController extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Fetch all entries in the playlist URL.
+  /// Fetch all entries in the playlist URL. In parallel, ask yt-dlp for the
+  /// playlist's own title via [YtDlpService.getPlaylistTitle] so the
+  /// Playlist screen can pre-fill the group-folder name field.
   Future<void> fetchPlaylist(String url) async {
     _phase = PlaylistPhase.fetching;
     _entries = [];
     _selected.clear();
     _errorMessage = null;
+    _playlistTitle = null;
     notifyListeners();
 
+    final trimmed = url.trim();
+    final titleFuture = _service.getPlaylistTitle(trimmed);
     try {
-      _entries = await _service.fetchPlaylist(url.trim());
+      _entries = await _service.fetchPlaylist(trimmed);
       if (_entries.isEmpty) {
         _phase = PlaylistPhase.error;
         _errorMessage = 'No videos found in this playlist.';
@@ -79,6 +91,12 @@ class PlaylistController extends ChangeNotifier {
     } catch (e) {
       _phase = PlaylistPhase.error;
       _errorMessage = 'Unexpected error: $e';
+    }
+    // Title is best-effort — never fail the playlist fetch over it.
+    try {
+      _playlistTitle = await titleFuture;
+    } catch (_) {
+      _playlistTitle = null;
     }
     notifyListeners();
   }
@@ -100,6 +118,7 @@ class PlaylistController extends ChangeNotifier {
     _entries = [];
     _selected.clear();
     _errorMessage = null;
+    _playlistTitle = null;
     notifyListeners();
   }
 }

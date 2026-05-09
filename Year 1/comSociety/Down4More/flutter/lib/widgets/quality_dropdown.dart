@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../models/video_metadata.dart';
+import 'format_dropdown.dart' show formatBytes;
 
 /// Dropdown of curated qualities for a fetched video. Appears under the
 /// metadata card.
@@ -64,7 +65,7 @@ class _QualityRow extends StatelessWidget {
         if (format.fileSize != null) ...[
           const SizedBox(width: 8),
           Text(
-            _formatBytes(format.fileSize!),
+            formatBytes(format.fileSize!),
             style: TextStyle(
               color: scheme.onSurfaceVariant,
               fontSize: 12,
@@ -74,14 +75,4 @@ class _QualityRow extends StatelessWidget {
       ],
     );
   }
-}
-
-String _formatBytes(int bytes) {
-  const kb = 1024;
-  const mb = 1024 * 1024;
-  const gb = 1024 * 1024 * 1024;
-  if (bytes >= gb) return '${(bytes / gb).toStringAsFixed(1)} GB';
-  if (bytes >= mb) return '${(bytes / mb).toStringAsFixed(0)} MB';
-  if (bytes >= kb) return '${(bytes / kb).toStringAsFixed(0)} KB';
-  return '$bytes B';
 }

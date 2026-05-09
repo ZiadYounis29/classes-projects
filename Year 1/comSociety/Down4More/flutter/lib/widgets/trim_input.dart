@@ -5,6 +5,11 @@ import 'package:flutter/services.dart';
 /// for a video segment. When both fields are empty the trim is disabled and
 /// the download proceeds as normal.
 ///
+/// The fields use a "digit-shift" entry style: the user types raw digits and
+/// the colons are inserted automatically. Typing `5 5 1 2` shows `55:12`
+/// (55 min 12 s); typing one more digit shifts everything left to
+/// `5:51:2x` → `5:51:20`. Backspace removes the rightmost digit.
+///
 /// Calls [onChanged] whenever either field changes to a valid (or cleared)
 /// value. [onChanged] receives (start, end) where either may be null.
 class TrimInput extends StatefulWidget {
@@ -50,6 +55,9 @@ class _TrimInputState extends State<TrimInput> {
     String? startErr;
     String? endErr;
 
+    // Format errors only fire when the user has typed something but the
+    // digit-shift formatter somehow produced an unparseable string. In
+    // practice this is unreachable, but we keep the check defensive.
     if (_startController.text.trim().isNotEmpty && start == null) {
       startErr = 'Use HH:MM:SS or MM:SS';
     }
@@ -74,7 +82,6 @@ class _TrimInputState extends State<TrimInput> {
     final validStart = startErr == null ? start : null;
     final validEnd = endErr == null ? end : null;
 
-    // Don't fire if there were validation errors on non-empty fields.
     final hasStartErr = startErr != null;
     final hasEndErr = endErr != null;
     if (!hasStartErr && !hasEndErr) {
@@ -99,13 +106,33 @@ class _TrimInputState extends State<TrimInput> {
     final hasTrim = _startController.text.trim().isNotEmpty ||
         _endController.text.trim().isNotEmpty;
 
+    // Soft "active" treatment: when the trim has values, we shift the card
+    // into a primaryContainer tint instead of using the raw `primary` color.
+    // On a vivid theme like Crimson, primary is bright red and reads as an
+    // *error* state next to the actual error UI. primaryContainer is a
+    // softer derived tone — it says "selection" without competing with the
+    // error banner below.
+    final Color cardColor = hasTrim
+        ? Color.alphaBlend(
+            scheme.primaryContainer.withValues(alpha: 0.45),
+            scheme.surfaceContainerLow,
+          )
+        : scheme.surfaceContainerLow;
+    final Color borderColor = hasTrim
+        ? scheme.primary.withValues(alpha: 0.40)
+        : scheme.outlineVariant;
+    final Color titleColor =
+        hasTrim ? scheme.onPrimaryContainer : scheme.onSurface;
+    final Color iconColor =
+        hasTrim ? scheme.onPrimaryContainer : scheme.onSurfaceVariant;
+
     return Card(
       margin: EdgeInsets.zero,
-      color: scheme.surfaceContainerLow,
+      color: cardColor,
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: scheme.outlineVariant),
+        side: BorderSide(color: borderColor),
       ),
       child: Column(
         children: [
@@ -122,18 +149,38 @@ class _TrimInputState extends State<TrimInput> {
                   Icon(
                     Icons.content_cut_rounded,
                     size: 18,
-                    color: hasTrim ? scheme.primary : scheme.onSurfaceVariant,
+                    color: iconColor,
                   ),
                   const SizedBox(width: 10),
                   Text(
                     'Trim segment',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w600,
-                      color: hasTrim
-                          ? scheme.primary
-                          : scheme.onSurface,
+                      color: titleColor,
                     ),
                   ),
+                  if (hasTrim) ...[
+                    const SizedBox(width: 8),
+                    // Compact "Active" pill so the selection state is
+                    // unambiguous independent of color.
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 2,
+                      ),
+                      decoration: BoxDecoration(
+                        color: scheme.secondaryContainer,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Text(
+                        'Active',
+                        style: theme.textTheme.labelSmall?.copyWith(
+                          color: scheme.onSecondaryContainer,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
                   const SizedBox(width: 8),
                   // Show the current range as a hint when collapsed.
                   if (!_expanded && hasTrim)
@@ -178,11 +225,10 @@ class _TrimInputState extends State<TrimInput> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Expanded(
-                        child: _TimeField(
+                        child: _DigitShiftField(
                           controller: _startController,
                           label: 'Start time',
                           hint: '0:00',
-                          errorText: _startError,
                           enabled: widget.enabled,
                           onChanged: (_) => _onFieldChanged(),
                           onClear: _clearStart,
@@ -190,13 +236,12 @@ class _TrimInputState extends State<TrimInput> {
                       ),
                       const SizedBox(width: 12),
                       Expanded(
-                        child: _TimeField(
+                        child: _DigitShiftField(
                           controller: _endController,
                           label: 'End time',
                           hint: widget.videoDuration != null
                               ? _formatDur(widget.videoDuration!)
                               : 'end',
-                          errorText: _endError,
                           enabled: widget.enabled,
                           onChanged: (_) => _onFieldChanged(),
                           onClear: _clearEnd,
@@ -204,10 +249,29 @@ class _TrimInputState extends State<TrimInput> {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 8),
+
+                  // ── Vibrant warning banners ─────────────────────────────────────
+                  // Replace the dim default `errorText` underline with an
+                  // explicit, high-contrast banner per affected field.
+                  if (_startError != null) ...[
+                    const SizedBox(height: 10),
+                    _WarningBanner(
+                      label: 'Start time',
+                      message: _startError!,
+                    ),
+                  ],
+                  if (_endError != null) ...[
+                    const SizedBox(height: 10),
+                    _WarningBanner(
+                      label: 'End time',
+                      message: _endError!,
+                    ),
+                  ],
+
+                  const SizedBox(height: 10),
                   Text(
-                    'Leave blank to keep the original. '
-                    'Requires ffmpeg on PATH.',
+                    'Type digits — colons are inserted for you. '
+                    'Leave blank to keep the original. Requires ffmpeg on PATH.',
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: scheme.onSurfaceVariant,
                     ),
@@ -232,21 +296,74 @@ class _TrimInputState extends State<TrimInput> {
 
 // ── Single time-input field ──────────────────────────────────────────────────
 
-class _TimeField extends StatelessWidget {
-  const _TimeField({
+class _WarningBanner extends StatelessWidget {
+  const _WarningBanner({required this.label, required this.message});
+  final String label;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 120),
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: scheme.errorContainer,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(
+          color: scheme.error.withValues(alpha: 0.65),
+          width: 1.2,
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(
+            Icons.warning_amber_rounded,
+            size: 20,
+            color: scheme.error,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: RichText(
+              text: TextSpan(
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: scheme.onErrorContainer,
+                ),
+                children: [
+                  TextSpan(
+                    text: '$label: ',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  TextSpan(text: message),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+/// A TextField that interprets user input as a sequence of digits and
+/// formats them right-to-left into `S`, `M:SS`, `MM:SS`, `H:MM:SS`,
+/// `HH:MM:SS`. Colons are inserted automatically. Backspace removes the
+/// rightmost digit. The cursor is always pinned at the end.
+class _DigitShiftField extends StatelessWidget {
+  const _DigitShiftField({
     required this.controller,
     required this.label,
     required this.hint,
     required this.onChanged,
     required this.onClear,
-    this.errorText,
     this.enabled = true,
   });
 
   final TextEditingController controller;
   final String label;
   final String hint;
-  final String? errorText;
   final ValueChanged<String> onChanged;
   final VoidCallback onClear;
   final bool enabled;
@@ -257,17 +374,12 @@ class _TimeField extends StatelessWidget {
       controller: controller,
       enabled: enabled,
       onChanged: onChanged,
-      keyboardType: TextInputType.datetime,
+      keyboardType: TextInputType.number,
       textInputAction: TextInputAction.next,
-      inputFormatters: [
-        // Allow digits and colons only.
-        FilteringTextInputFormatter.allow(RegExp(r'[\d:]')),
-        LengthLimitingTextInputFormatter(8), // HH:MM:SS
-      ],
+      inputFormatters: const [DigitShiftFormatter()],
       decoration: InputDecoration(
         labelText: label,
         hintText: hint,
-        errorText: errorText,
         prefixIcon: const Icon(Icons.access_time_outlined, size: 18),
         suffixIcon: controller.text.isNotEmpty
             ? IconButton(
@@ -285,6 +397,64 @@ class _TimeField extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Strips non-digits, caps to 6 digits, then re-renders the time string with
+/// auto-inserted colons. The cursor is reset to the end after every edit so
+/// the digit-shift behaviour feels like a calculator rather than a free-form
+/// text field.
+@visibleForTesting
+class DigitShiftFormatter extends TextInputFormatter {
+  const DigitShiftFormatter();
+
+  @override
+  TextEditingValue formatEditUpdate(
+    TextEditingValue oldValue,
+    TextEditingValue newValue,
+  ) {
+    final digits = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
+    final capped = digits.length > 6
+        ? digits.substring(digits.length - 6)
+        : digits;
+    final formatted = formatDigitsAsTime(capped);
+    return TextEditingValue(
+      text: formatted,
+      selection: TextSelection.collapsed(offset: formatted.length),
+    );
+  }
+}
+
+/// Right-aligned time formatter that powers the digit-shift entry field.
+///
+/// Examples:
+/// ```
+/// formatDigitsAsTime('')      => ''
+/// formatDigitsAsTime('5')     => '0:05'
+/// formatDigitsAsTime('55')    => '0:55'
+/// formatDigitsAsTime('551')   => '5:51'
+/// formatDigitsAsTime('5512')  => '55:12'
+/// formatDigitsAsTime('55120') => '5:51:20'
+/// formatDigitsAsTime('551209')=> '55:12:09'
+/// ```
+@visibleForTesting
+String formatDigitsAsTime(String digits) {
+  if (digits.isEmpty) return '';
+  final n = digits.length;
+  if (n <= 2) {
+    // SS → 0:SS (always show the leading "0:" so the user sees the unit).
+    return '0:${digits.padLeft(2, '0')}';
+  }
+  if (n <= 4) {
+    // M:SS or MM:SS — drop the leading zero on the minutes side.
+    final ss = digits.substring(n - 2);
+    final mm = digits.substring(0, n - 2);
+    return '$mm:$ss';
+  }
+  // 5 or 6 digits → H:MM:SS or HH:MM:SS.
+  final ss = digits.substring(n - 2);
+  final mm = digits.substring(n - 4, n - 2);
+  final hh = digits.substring(0, n - 4);
+  return '$hh:$mm:$ss';
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

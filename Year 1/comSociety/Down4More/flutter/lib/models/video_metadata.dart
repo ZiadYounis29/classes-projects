@@ -133,28 +133,56 @@ class VideoMetadata {
 ///    best codec/container at that ceiling instead of us hard-coding ids.
 /// 3. Add an audio-only "best audio" entry.
 ///
+/// For each entry we also compute an expected file size by walking the raw
+/// format list: per height, the largest reported `filesize` (or
+/// `filesize_approx`) is used as the representative video size; the best
+/// audio-only format's size is added on top. The result is shown next to
+/// the quality label so the user can compare disk cost at a glance.
+///
 /// We deliberately do NOT just expose every raw yt-dlp format id — most of
 /// them are partial streams (video-only or audio-only) and downloading them
 /// would produce a broken file unless merged with another. The selector
 /// expressions above let yt-dlp do the merge automatically.
 List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
-  final availableHeights = <int>{};
-  int? bestHeightSize;
+  // height → biggest-known filesize at that height. Many videos report a
+  // filesize for some formats and not others; we take the max so the rung
+  // size reflects the highest-quality variant the user could actually pick.
+  final videoSizesByHeight = <int, int>{};
   int? bestAudioSize;
+
   for (final f in rawFormats) {
-    final h = f['height'] as num?;
-    if (h != null) availableHeights.add(h.round());
+    final h = (f['height'] as num?)?.round();
     final size = (f['filesize'] as num?) ?? (f['filesize_approx'] as num?);
-    if (h != null && size != null) {
-      bestHeightSize = ((bestHeightSize ?? 0) < size.round())
-          ? size.round()
-          : bestHeightSize;
+    if (size == null) continue;
+    final bytes = size.round();
+    if (h != null) {
+      final prev = videoSizesByHeight[h];
+      if (prev == null || bytes > prev) videoSizesByHeight[h] = bytes;
+    } else if ((f['acodec'] as String?) != 'none' &&
+        (f['vcodec'] as String? ?? 'none') == 'none') {
+      // Audio-only format. yt-dlp marks vcodec='none' for these.
+      if (bestAudioSize == null || bytes > bestAudioSize) {
+        bestAudioSize = bytes;
+      }
     }
-    if (h == null && (f['acodec'] as String?) != 'none' && size != null) {
-      bestAudioSize = ((bestAudioSize ?? 0) < size.round())
-          ? size.round()
-          : bestAudioSize;
+  }
+
+  final availableHeights = videoSizesByHeight.keys.toList()..sort();
+  final hasAnyHeight = availableHeights.isNotEmpty;
+  final topHeight = hasAnyHeight ? availableHeights.last : null;
+
+  /// Sum of "biggest video at height ≤ ceiling" plus best audio. Returns
+  /// `null` when neither side is known so the UI just hides the size chip.
+  int? sizeForCeiling(int? ceiling) {
+    int? video;
+    for (final h in availableHeights) {
+      if (ceiling != null && h > ceiling) continue;
+      final s = videoSizesByHeight[h];
+      if (s == null) continue;
+      if (video == null || s > video) video = s;
     }
+    if (video == null && bestAudioSize == null) return null;
+    return (video ?? 0) + (bestAudioSize ?? 0);
   }
 
   final out = <VideoFormat>[
@@ -163,7 +191,7 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
       label: 'Best available',
       ext: 'mp4',
       height: null,
-      fileSize: bestHeightSize,
+      fileSize: sizeForCeiling(topHeight),
       note: 'Highest quality video + audio',
       isAudioOnly: false,
     ),
@@ -181,7 +209,7 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
         label: '${h}p',
         ext: 'mp4',
         height: h,
-        fileSize: null,
+        fileSize: sizeForCeiling(h),
         note: null,
         isAudioOnly: false,
       ),

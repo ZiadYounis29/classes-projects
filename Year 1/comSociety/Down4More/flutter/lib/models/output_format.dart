@@ -15,6 +15,8 @@ class OutputFormat {
     required this.label,
     required this.category,
     this.note,
+    this.videoSizeMultiplier,
+    this.audioBitrateKbps,
   });
 
   /// File extension / yt-dlp format name, e.g. `'mp4'`, `'mp3'`.
@@ -28,8 +30,38 @@ class OutputFormat {
   /// Optional one-liner shown as a subtitle, e.g. `'Best compatibility'`.
   final String? note;
 
+  /// For video formats: rough estimate of output size as a fraction of the
+  /// source video's file size. MP4 / MKV are direct remuxes (~1.00×), WebM
+  /// is a slightly smaller container (~0.95×). `null` for audio formats.
+  final double? videoSizeMultiplier;
+
+  /// For audio formats: the typical encoder bitrate in kilobits per second,
+  /// used to estimate output size as `duration × kbps × 1000 / 8`. FLAC and
+  /// WAV use representative values for CD-quality stereo. `null` for video.
+  final int? audioBitrateKbps;
+
   bool get isAudio => category == OutputCategory.audio;
   bool get isVideo => category == OutputCategory.video;
+
+  /// Estimate the output file size in bytes given the source video's size and
+  /// duration. Returns `null` when the inputs aren't sufficient (e.g. no
+  /// source size for a video format, or no duration for an audio format).
+  ///
+  /// `sourceVideoBytes` is the curated `VideoFormat.fileSize` of the
+  /// currently-selected quality. `duration` is `VideoMetadata.duration`.
+  int? estimateBytes({
+    int? sourceVideoBytes,
+    Duration? duration,
+  }) {
+    if (isVideo) {
+      if (sourceVideoBytes == null || videoSizeMultiplier == null) return null;
+      return (sourceVideoBytes * videoSizeMultiplier!).round();
+    }
+    // Audio: bitrate × duration. We never use the source video size here
+    // because picking a 1080p video doesn't change how big the MP3 will be.
+    if (duration == null || audioBitrateKbps == null) return null;
+    return (audioBitrateKbps! * 1000 * duration.inSeconds / 8).round();
+  }
 
   @override
   String toString() => 'OutputFormat($ext)';
@@ -51,18 +83,21 @@ const List<OutputFormat> kVideoFormats = [
     label: 'MP4',
     category: OutputCategory.video,
     note: 'Best compatibility',
+    videoSizeMultiplier: 1.0,
   ),
   OutputFormat(
     ext: 'mkv',
     label: 'MKV',
     category: OutputCategory.video,
     note: 'Keeps all streams, larger file',
+    videoSizeMultiplier: 1.0,
   ),
   OutputFormat(
     ext: 'webm',
     label: 'WebM',
     category: OutputCategory.video,
     note: 'Open format, VP9/Opus',
+    videoSizeMultiplier: 0.95,
   ),
 ];
 
@@ -74,36 +109,44 @@ const List<OutputFormat> kAudioFormats = [
     label: 'M4A',
     category: OutputCategory.audio,
     note: 'AAC in MPEG-4 container',
+    audioBitrateKbps: 128,
   ),
   OutputFormat(
     ext: 'mp3',
     label: 'MP3',
     category: OutputCategory.audio,
     note: 'Universal compatibility',
+    audioBitrateKbps: 128,
   ),
   OutputFormat(
     ext: 'opus',
     label: 'Opus',
     category: OutputCategory.audio,
     note: 'Best quality per bit',
+    audioBitrateKbps: 96,
   ),
   OutputFormat(
     ext: 'flac',
     label: 'FLAC',
     category: OutputCategory.audio,
     note: 'Lossless',
+    // Roughly half of WAV PCM thanks to lossless compression on stereo audio.
+    audioBitrateKbps: 700,
   ),
   OutputFormat(
     ext: 'wav',
     label: 'WAV',
     category: OutputCategory.audio,
     note: 'Uncompressed PCM',
+    // 16-bit / 44.1 kHz / stereo — the canonical CD-audio bitrate.
+    audioBitrateKbps: 1411,
   ),
   OutputFormat(
     ext: 'ogg',
     label: 'OGG',
     category: OutputCategory.audio,
     note: 'Vorbis in Ogg container',
+    audioBitrateKbps: 96,
   ),
 ];
 
@@ -113,6 +156,7 @@ const OutputFormat kDefaultVideoFormat = OutputFormat(
   label: 'MP4',
   category: OutputCategory.video,
   note: 'Best compatibility',
+  videoSizeMultiplier: 1.0,
 );
 
 /// Default audio format (used when the quality selection is audio-only).
@@ -121,4 +165,5 @@ const OutputFormat kDefaultAudioFormat = OutputFormat(
   label: 'M4A',
   category: OutputCategory.audio,
   note: 'AAC in MPEG-4 container',
+  audioBitrateKbps: 128,
 );

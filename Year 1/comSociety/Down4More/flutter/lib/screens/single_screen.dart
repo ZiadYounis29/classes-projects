@@ -154,6 +154,11 @@ class _SingleScreenState extends State<SingleScreen> {
                     FormatDropdown(
                       selected: selectedOutput,
                       isAudioOnly: selected?.isAudioOnly ?? false,
+                      // Drive the per-row size estimate from whichever
+                      // quality the user just picked. Switching quality
+                      // re-renders the dropdown so the chip updates live.
+                      sourceVideoBytes: selected?.fileSize,
+                      videoDuration: metadata.duration,
                       enabled: !isDownloading,
                       onChanged: _controller.selectOutputFormat,
                     ),
