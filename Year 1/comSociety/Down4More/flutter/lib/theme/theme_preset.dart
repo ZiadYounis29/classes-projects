@@ -48,7 +48,7 @@ class ThemePreset {
       brightness: brightness,
       colorScheme: scheme,
       visualDensity: VisualDensity.standard,
-      cardTheme: CardTheme(
+      cardTheme: CardThemeData(
         elevation: 0,
         margin: EdgeInsets.zero,
         clipBehavior: Clip.antiAlias,
