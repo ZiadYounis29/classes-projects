@@ -26,6 +26,8 @@ class AppSettings extends ChangeNotifier {
   static const _kRetryDelay     = 'd4m.settings.retryDelay';
   static const _kBatchFolder    = 'd4m.settings.batchFolder';
   static const _kPlaylistFolder = 'd4m.settings.playlistFolder';
+  static const _kDefaultSubtitleLang   = 'd4m.settings.defaultSubtitleLang';
+  static const _kDefaultSubtitleFormat = 'd4m.settings.defaultSubtitleFormat';
 
   SharedPreferences? _prefs;
 
@@ -43,6 +45,8 @@ class AppSettings extends ChangeNotifier {
   int    _retryDelay     = 5;       // seconds between retries
   bool   _batchFolder    = true;    // default: save batch downloads into a subfolder
   bool   _playlistFolder = true;    // default: save playlist downloads into a subfolder
+  String _defaultSubtitleLang   = 'en';   // IETF tag, applied when subs are enabled
+  String _defaultSubtitleFormat = 'srt';  // srt / vtt / ass / lrc
 
   // ── Public getters ─────────────────────────────────────────────────────────
   String get downloadDir    => _downloadDir;
@@ -56,6 +60,8 @@ class AppSettings extends ChangeNotifier {
   int    get retryDelay     => _retryDelay;
   bool   get batchFolder    => _batchFolder;
   bool   get playlistFolder => _playlistFolder;
+  String get defaultSubtitleLang   => _defaultSubtitleLang;
+  String get defaultSubtitleFormat => _defaultSubtitleFormat;
 
   /// Convenience: whether a speed cap is configured.
   bool get hasSpeedLimit => _speedLimit.trim().isNotEmpty;
@@ -144,6 +150,18 @@ class AppSettings extends ChangeNotifier {
     await _write(_kPlaylistFolder, v);
   }
 
+  Future<void> setDefaultSubtitleLang(String v) async {
+    _defaultSubtitleLang = v.trim();
+    notifyListeners();
+    await _write(_kDefaultSubtitleLang, _defaultSubtitleLang);
+  }
+
+  Future<void> setDefaultSubtitleFormat(String v) async {
+    _defaultSubtitleFormat = v.trim();
+    notifyListeners();
+    await _write(_kDefaultSubtitleFormat, _defaultSubtitleFormat);
+  }
+
   // ── Load from disk ─────────────────────────────────────────────────────────
 
   Future<void> load() async {
@@ -161,6 +179,8 @@ class AppSettings extends ChangeNotifier {
     _retryDelay     = p.getInt(_kRetryDelay)       ?? 5;
     _batchFolder    = p.getBool(_kBatchFolder)     ?? true;
     _playlistFolder = p.getBool(_kPlaylistFolder)  ?? true;
+    _defaultSubtitleLang   = p.getString(_kDefaultSubtitleLang)   ?? 'en';
+    _defaultSubtitleFormat = p.getString(_kDefaultSubtitleFormat) ?? 'srt';
 
     notifyListeners();
   }

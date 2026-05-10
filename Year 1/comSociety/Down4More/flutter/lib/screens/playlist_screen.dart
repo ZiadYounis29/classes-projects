@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 import '../controllers/download_queue_controller.dart';
 import '../controllers/playlist_controller.dart';
 import '../models/output_format.dart';
+import '../models/subtitle_settings.dart';
 import '../settings/app_settings.dart';
 import '../widgets/queue_item_row.dart';
+import '../widgets/subtitle_input.dart';
 
 /// Playlist download screen.
 ///
@@ -142,6 +144,13 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     final q = DownloadQueueController(appSettings: widget.appSettings);
     q.addEntries(entries);
     q.setGroupFolder(enabled: _groupFolderEnabled, name: _folderCtrl.text);
+    // Seed the queue's global subtitle config from the user's saved
+    // defaults, but keep `enabled: false` so subs are an opt-in per playlist.
+    q.setGlobalSubtitles(SubtitleSettings(
+      enabled: false,
+      language: widget.appSettings.defaultSubtitleLang,
+      format: widget.appSettings.defaultSubtitleFormat,
+    ));
     q.addListener(_onQueueUpdate);
     _queueCtrl = q;
     _started = false;
@@ -235,10 +244,15 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                   if (inSelection) ...[
                     const SizedBox(height: 16),
                     _buildSelectionHeader(context),
+                    const SizedBox(height: 12),
+                    // Continue button sits directly above the list so the
+                    // user doesn't have to scroll to the bottom of a long
+                    // playlist to advance — it's always reachable in the
+                    // first viewport and updates its label live with the
+                    // selection count.
+                    _buildContinueButton(context),
                     const SizedBox(height: 8),
                     _buildEntryList(context),
-                    const SizedBox(height: 16),
-                    _buildContinueButton(context),
                   ],
                   if (inConfigure) ...[
                     const SizedBox(height: 16),
@@ -582,6 +596,12 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                         setState(() => _globalOutput = f);
                         q.setGlobalOutputFormat(f);
                       },
+                    ),
+                    const SizedBox(height: 12),
+                    SubtitleInput(
+                      value: q.globalSubtitles,
+                      outputFormat: _globalOutput,
+                      onChanged: q.setGlobalSubtitles,
                     ),
                     const SizedBox(height: 12),
                   ],

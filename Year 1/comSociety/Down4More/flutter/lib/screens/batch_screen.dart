@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 
 import '../controllers/download_queue_controller.dart';
 import '../models/output_format.dart';
+import '../models/subtitle_settings.dart';
 import '../settings/app_settings.dart';
 import '../widgets/queue_item_row.dart';
+import '../widgets/subtitle_input.dart';
 
 /// Batch download screen.
 ///
@@ -105,6 +107,14 @@ class _BatchScreenState extends State<BatchScreen> {
 
     _folderCtrl.text = 'Batch';
     q.setGroupFolder(enabled: widget.appSettings.batchFolder, name: 'Batch');
+
+    // Seed the queue's global subtitle config from the user's saved
+    // defaults, but keep `enabled: false` so subs are an opt-in per batch.
+    q.setGlobalSubtitles(SubtitleSettings(
+      enabled: false,
+      language: widget.appSettings.defaultSubtitleLang,
+      format: widget.appSettings.defaultSubtitleFormat,
+    ));
 
     q.addListener(_onQueueUpdate);
     _queueCtrl = q;
@@ -262,6 +272,7 @@ class _BatchScreenState extends State<BatchScreen> {
             folderCtrl: _folderCtrl,
             globalOutput: _globalOutput,
             globalQualityHeight: _globalQualityHeight,
+            onSubtitlesChanged: q.setGlobalSubtitles,
             onQualityChanged: (h) {
               setState(() {
                 _globalQualityHeight = h;
@@ -537,6 +548,7 @@ class _ConfigureCard extends StatelessWidget {
     required this.onFormatChanged,
     required this.onModeChanged,
     required this.onGroupFolderToggle,
+    required this.onSubtitlesChanged,
     required this.onStartDownload,
     required this.onBack,
   });
@@ -550,6 +562,7 @@ class _ConfigureCard extends StatelessWidget {
   final ValueChanged<OutputFormat> onFormatChanged;
   final ValueChanged<QualityMode> onModeChanged;
   final ValueChanged<bool> onGroupFolderToggle;
+  final ValueChanged<SubtitleSettings> onSubtitlesChanged;
   final VoidCallback onStartDownload;
   final VoidCallback onBack;
 
@@ -627,6 +640,12 @@ class _ConfigureCard extends StatelessWidget {
                       globalOutput: globalOutput,
                       isAudioOnly: globalQualityHeight == -1,
                       onChanged: onFormatChanged,
+                    ),
+                    const SizedBox(height: 12),
+                    SubtitleInput(
+                      value: queue.globalSubtitles,
+                      outputFormat: globalOutput,
+                      onChanged: onSubtitlesChanged,
                     ),
                     const SizedBox(height: 12),
                   ],

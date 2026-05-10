@@ -7,6 +7,7 @@ import 'package:path/path.dart' as p;
 
 import '../models/download_progress.dart';
 import '../models/playlist_entry.dart';
+import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
 
 /// Thin wrapper around the `yt-dlp` CLI. Pure Dart, no UI deps — safe to
@@ -183,6 +184,7 @@ class YtDlpService {
     Duration? trimEnd,
     String? rateLimit,
     bool keepPartial = false,
+    SubtitleSettings? subtitles,
   }) {
     final controller = StreamController<DownloadProgress>.broadcast();
     final processCompleter = Completer<Process>();
@@ -208,6 +210,37 @@ class YtDlpService {
       effectiveTemplate = outputTemplate;
     }
 
+    // Build subtitle-related flags. We only add them when the user has
+    // explicitly enabled subtitles AND the language string is non-empty —
+    // otherwise the SubtitleSettings.disabled instance is a no-op and yt-dlp
+    // gets no extra flags. Embedding is only honoured for video output and
+    // for containers that actually carry subs (MP4 / MKV); for everything
+    // else the toggle quietly falls back to writing a sidecar file.
+    final List<String> subtitleArgs;
+    if (subtitles != null &&
+        subtitles.enabled &&
+        subtitles.language.trim().isNotEmpty) {
+      final lang = subtitles.language.trim();
+      final fmt = subtitles.format.trim().isEmpty
+          ? 'srt'
+          : subtitles.format.trim();
+      final canEmbed = !isAudio && kEmbedSubsSupportedExts.contains(outputExt);
+      subtitleArgs = <String>[
+        '--write-subs',
+        if (subtitles.autoTranslate) '--write-auto-subs',
+        '--sub-langs', lang,
+        // --sub-format prefers a specific source format from the server,
+        // --convert-subs guarantees the on-disk extension matches no matter
+        // what yt-dlp downloaded. Pair them so e.g. picking "srt" works
+        // even when only VTT is available.
+        '--sub-format', '$fmt/best',
+        '--convert-subs', fmt,
+        if (subtitles.embed && canEmbed) '--embed-subs',
+      ];
+    } else {
+      subtitleArgs = const <String>[];
+    }
+
     final args = <String>[
       '--newline',
       '--no-playlist',
@@ -216,6 +249,7 @@ class YtDlpService {
       if (isAudio) ...['-x', '--audio-format', ytdlpAudioFmt]
       else ...['--merge-output-format', outputExt],
       if (rateLimit != null && rateLimit.isNotEmpty) ...['--rate-limit', rateLimit],
+      ...subtitleArgs,
       '-o', p.join(outputDir, effectiveTemplate),
       metadata.url,
     ];

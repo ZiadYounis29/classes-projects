@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/download_progress.dart';
 import '../models/output_format.dart';
+import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
 import '../services/ytdlp_service.dart';
 import '../settings/app_settings.dart';
@@ -38,6 +39,7 @@ class SingleDownloadController extends ChangeNotifier {
   Duration? _trimEnd;
   String _customFilename = '';
   bool _filenameManuallyEdited = false;
+  SubtitleSettings _subtitles = SubtitleSettings.disabled;
   DownloadHandle? _handle;
   StreamSubscription<DownloadProgress>? _progressSub;
   int _retryAttempt = 0;
@@ -49,6 +51,7 @@ class SingleDownloadController extends ChangeNotifier {
   Duration? get trimStart => _trimStart;
   Duration? get trimEnd => _trimEnd;
   String get customFilename => _customFilename;
+  SubtitleSettings get subtitles => _subtitles;
 
   bool get isBusy =>
       _progress.phase == DownloadPhase.fetchingMetadata ||
@@ -165,6 +168,11 @@ class SingleDownloadController extends ChangeNotifier {
     final wasAudio = _selectedOutputFormat.isAudio;
     final isNowAudio = fmt.isAudio;
     _selectedOutputFormat = fmt;
+    // Subtitle embedding only works for MP4/MKV. When the user switches to
+    // a non-embeddable format (anything else, or any audio-only format)
+    // while embed was on, snap it off so we never silently produce a file
+    // missing the subtitles the user just asked us to bake in.
+    _subtitles = _subtitles.snapEmbedFor(fmt);
     // When switching categories, snap the quality selection to a sane default
     // for the new category so the two dropdowns stay consistent.
     if (wasAudio != isNowAudio && _metadata != null) {
@@ -193,6 +201,16 @@ class SingleDownloadController extends ChangeNotifier {
   void setCustomFilename(String name) {
     _customFilename = name;
     _filenameManuallyEdited = true;
+    notifyListeners();
+  }
+
+  /// Replace the per-download subtitle config. The widget hands us a fully-
+  /// formed [SubtitleSettings] every time anything changes so the controller
+  /// doesn't need to know about individual fields.
+  void setSubtitleSettings(SubtitleSettings s) {
+    final snapped = s.snapEmbedFor(_selectedOutputFormat);
+    if (snapped == _subtitles) return;
+    _subtitles = snapped;
     notifyListeners();
   }
 
@@ -268,6 +286,7 @@ class SingleDownloadController extends ChangeNotifier {
           ? _appSettings!.speedLimit
           : null,
       keepPartial: _appSettings?.keepPartial ?? false,
+      subtitles: _subtitles.enabled ? _subtitles : null,
     );
     _progressSub = _handle!.stream.listen((event) {
       _progress = event;
@@ -322,6 +341,7 @@ class SingleDownloadController extends ChangeNotifier {
     _trimEnd = null;
     _customFilename = '';
     _filenameManuallyEdited = false;
+    _subtitles = SubtitleSettings.disabled;
     _retryAttempt = 0;
     notifyListeners();
   }

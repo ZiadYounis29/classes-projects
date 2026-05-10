@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../models/subtitle_settings.dart';
 import '../settings/app_settings.dart';
 import '../theme/theme_controller.dart';
 import '../widgets/theme_picker.dart';
@@ -106,6 +107,31 @@ class SettingsScreen extends StatelessWidget {
               subtitle: 'Create a named subfolder for each playlist by default',
               value: appSettings.playlistFolder,
               onChanged: appSettings.setPlaylistFolder,
+            ),
+            const SizedBox(height: 32),
+
+            // ── Subtitles ───────────────────────────────────────────────────
+            const _SectionHeader(
+                icon: Icons.closed_caption_outlined, title: 'Subtitles'),
+            const SizedBox(height: 12),
+            _SubtitleLanguageTile(appSettings: appSettings),
+            const SizedBox(height: 8),
+            _DropdownTile<String>(
+              icon: Icons.subtitles_outlined,
+              title: 'Default subtitle format',
+              subtitle:
+                  'srt is the universal default; vtt for web; ass for styling',
+              value: kSubtitleFormats.any((f) => f.ext == appSettings.defaultSubtitleFormat)
+                  ? appSettings.defaultSubtitleFormat
+                  : kDefaultSubtitleFormat.ext,
+              items: [
+                for (final f in kSubtitleFormats)
+                  DropdownMenuItem<String>(
+                    value: f.ext,
+                    child: Text(f.label),
+                  ),
+              ],
+              onChanged: appSettings.setDefaultSubtitleFormat,
             ),
             const SizedBox(height: 32),
 
@@ -607,6 +633,126 @@ class _StepperTile extends StatelessWidget {
               ),
             ],
           ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Subtitle language tile ────────────────────────────────────────────────────
+
+/// Default subtitle language picker. Mirrors the in-flow [SubtitleInput]
+/// language row: a dropdown of the 12 common IETF tags plus an "Other…"
+/// option that reveals a free-form text field for anything more exotic
+/// (regional variants like `pt-BR`, alternate scripts like `zh-Hant`,
+/// uploader-original tracks like `en-orig`, etc.).
+class _SubtitleLanguageTile extends StatefulWidget {
+  const _SubtitleLanguageTile({required this.appSettings});
+  final AppSettings appSettings;
+
+  @override
+  State<_SubtitleLanguageTile> createState() => _SubtitleLanguageTileState();
+}
+
+class _SubtitleLanguageTileState extends State<_SubtitleLanguageTile> {
+  static const String _other = '__other__';
+  late final TextEditingController _customCtrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _customCtrl = TextEditingController(
+      text: _isCustom(widget.appSettings.defaultSubtitleLang)
+          ? widget.appSettings.defaultSubtitleLang
+          : '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _customCtrl.dispose();
+    super.dispose();
+  }
+
+  bool _isCustom(String code) =>
+      code.isNotEmpty && !kSubtitleLanguages.any((l) => l.code == code);
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final theme = Theme.of(context);
+    final current = widget.appSettings.defaultSubtitleLang;
+    final selected = _isCustom(current) ? _other : current;
+
+    return _SettingCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.language_rounded, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Default subtitle language',
+                        style: theme.textTheme.bodyLarge
+                            ?.copyWith(fontWeight: FontWeight.w600)),
+                    Text(
+                      'Used when you flip on subtitles in Single, Batch, or Playlist',
+                      style: theme.textTheme.bodySmall
+                          ?.copyWith(color: scheme.onSurfaceVariant),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            value: kSubtitleLanguages.any((l) => l.code == selected) ||
+                    selected == _other
+                ? selected
+                : kSubtitleLanguages.first.code,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              isDense: true,
+              contentPadding:
+                  EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+            items: [
+              for (final l in kSubtitleLanguages)
+                DropdownMenuItem(value: l.code, child: Text(l.label)),
+              const DropdownMenuItem(value: _other, child: Text('Other…')),
+            ],
+            onChanged: (v) {
+              if (v == null) return;
+              if (v == _other) {
+                final raw = _customCtrl.text.trim();
+                widget.appSettings.setDefaultSubtitleLang(raw);
+              } else {
+                widget.appSettings.setDefaultSubtitleLang(v);
+              }
+              setState(() {});
+            },
+          ),
+          if (selected == _other) ...[
+            const SizedBox(height: 8),
+            TextField(
+              controller: _customCtrl,
+              decoration: const InputDecoration(
+                labelText: 'IETF language tag',
+                hintText: 'e.g. pt-BR, zh-Hant, en-orig',
+                isDense: true,
+                prefixIcon: Icon(Icons.translate_rounded),
+                contentPadding:
+                    EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              ),
+              onChanged: (v) =>
+                  widget.appSettings.setDefaultSubtitleLang(v.trim()),
+            ),
+          ],
         ],
       ),
     );

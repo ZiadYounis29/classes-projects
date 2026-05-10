@@ -8,6 +8,7 @@ import '../models/download_progress.dart';
 import '../models/output_format.dart';
 import 'format_dropdown.dart';
 import 'quality_dropdown.dart';
+import 'subtitle_input.dart';
 
 /// One row in the Playlist / Batch queue list.
 ///
@@ -66,15 +67,19 @@ class QueueItemRow extends StatelessWidget {
             // chip (quality is shown by the global picker above the list);
             // in QualityMode.perItem we expand into Quality + Format
             // dropdowns next to the size chip so the user can override
-            // each row independently.
+            // each row independently. Per-item subtitle controls are
+            // appended underneath in per-item mode so the user can pin a
+            // different language/format/embed combo for each video.
             if (item.metadata != null &&
                 item.previewError == null &&
                 progress.phase != DownloadPhase.downloading &&
                 progress.phase != DownloadPhase.trimming) ...[
               const SizedBox(height: 6),
-              if (queue.qualityMode == QualityMode.perItem)
-                _buildPerItemControls(context)
-              else
+              if (queue.qualityMode == QualityMode.perItem) ...[
+                _buildPerItemControls(context),
+                const SizedBox(height: 8),
+                _buildPerItemSubtitles(context),
+              ] else
                 _buildQualityChip(context),
             ],
 
@@ -217,12 +222,25 @@ class QueueItemRow extends StatelessWidget {
 
   Widget _buildQualityChip(BuildContext context) {
     final m = item.metadata!;
+    if (m.formats.isEmpty) return const SizedBox.shrink();
     final selectedFormat = item.selectedFormat ?? m.formats.first;
+    final selectedOutput = item.selectedOutputFormat ??
+        (selectedFormat.isAudioOnly
+            ? kDefaultAudioFormat
+            : kDefaultVideoFormat);
 
-    // Only show the size chip — the quality label ("Best available", "1080p",
-    // etc.) is already conveyed by the global picker above the list.
-    if (selectedFormat.fileSize == null) return const SizedBox.shrink();
-    return _SizeChip(bytes: selectedFormat.fileSize!);
+    // Pick the size estimate based on BOTH resolution and output format.
+    // For video formats this uses the source video's bytes × the format's
+    // multiplier (≈1.0× for MP4/MKV, ≈0.95× for WebM); for audio formats
+    // it uses bitrate × duration so swapping to MP3 / Opus / FLAC produces
+    // a realistic estimate even though the source is a video stream.
+    final estimated = selectedOutput.estimateBytes(
+      sourceVideoBytes: selectedFormat.fileSize,
+      duration: m.duration,
+    );
+
+    if (estimated == null) return const SizedBox.shrink();
+    return _SizeChip(bytes: estimated);
   }
 
   /// Per-item Quality + Format dropdowns shown below the title row when the
@@ -238,6 +256,11 @@ class QueueItemRow extends StatelessWidget {
     final selectedFormat = item.selectedFormat ?? formats.first;
     final selectedOutput = item.selectedOutputFormat ??
         (selectedFormat.isAudioOnly ? kDefaultAudioFormat : kDefaultVideoFormat);
+
+    final estimated = selectedOutput.estimateBytes(
+      sourceVideoBytes: selectedFormat.fileSize,
+      duration: m.duration,
+    );
 
     return Wrap(
       spacing: 8,
@@ -262,9 +285,36 @@ class QueueItemRow extends StatelessWidget {
             videoDuration: m.duration,
           ),
         ),
-        if (selectedFormat.fileSize != null)
-          _SizeChip(bytes: selectedFormat.fileSize!),
+        if (estimated != null) _SizeChip(bytes: estimated),
       ],
+    );
+  }
+
+  /// Compact per-item subtitle picker shown only in [QualityMode.perItem].
+  ///
+  /// The effective config = per-item override (if set) || the queue's
+  /// [DownloadQueueController.globalSubtitles]. Any change is captured as a
+  /// per-item override so the user can deviate from the global pick on a
+  /// single row without disturbing the rest. Changing back to the exact
+  /// global value still keeps the override — this is intentional, since
+  /// otherwise toggling the master switch off would silently re-inherit
+  /// the global "on" state.
+  Widget _buildPerItemSubtitles(BuildContext context) {
+    final m = item.metadata;
+    if (m == null) return const SizedBox.shrink();
+    final selectedFormat = item.selectedFormat ?? m.formats.first;
+    final selectedOutput = item.selectedOutputFormat ??
+        (selectedFormat.isAudioOnly
+            ? kDefaultAudioFormat
+            : kDefaultVideoFormat);
+
+    final effective = item.subtitleSettings ?? queue.globalSubtitles;
+
+    return SubtitleInput(
+      value: effective,
+      outputFormat: selectedOutput,
+      compact: true,
+      onChanged: (s) => queue.setItemSubtitleSettings(item, s),
     );
   }
 

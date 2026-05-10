@@ -7,6 +7,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../models/download_progress.dart';
 import '../models/output_format.dart';
+import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
 import '../services/ytdlp_service.dart';
 import '../settings/app_settings.dart';
@@ -60,6 +61,13 @@ class QueueItem {
   /// [AppSettings.defaultFormat].
   OutputFormat? selectedOutputFormat;
 
+  /// Per-item subtitle override. When `null` the queue's
+  /// [DownloadQueueController.globalSubtitles] is used instead. Only ever
+  /// set when the user expands a row's subtitle controls in
+  /// [QualityMode.perItem]; in [QualityMode.global] this stays `null` so
+  /// every row inherits the global picker.
+  SubtitleSettings? subtitleSettings;
+
   /// Error message from the preview pass, if any. Distinct from
   /// `progress.errorMessage` which only fires once a download has actually
   /// started.
@@ -109,9 +117,13 @@ class DownloadQueueController extends ChangeNotifier {
   // ── Quality selection mode (global vs per-item) ──
   QualityMode _qualityMode = QualityMode.global;
 
+  // ── Subtitle config (global; items can override in per-item mode) ──
+  SubtitleSettings _globalSubtitles = SubtitleSettings.disabled;
+
   bool get groupFolderEnabled => _groupFolderEnabled;
   String get groupFolderName => _groupFolderName;
   QualityMode get qualityMode => _qualityMode;
+  SubtitleSettings get globalSubtitles => _globalSubtitles;
 
   /// Switch the queue between [QualityMode.global] and [QualityMode.perItem].
   ///
@@ -326,7 +338,55 @@ class DownloadQueueController extends ChangeNotifier {
   /// Override which container/codec one item should land as.
   void setItemOutputFormat(QueueItem item, OutputFormat? format) {
     item.selectedOutputFormat = format;
+    // Embed-subs requires MP4 / MKV. When the user changes this row's output
+    // away from one of those (or to an audio format) while their per-item
+    // override has embed=true, snap embed off so the download doesn't
+    // silently lose the subs.
+    if (format != null && item.subtitleSettings != null) {
+      item.subtitleSettings = item.subtitleSettings!.snapEmbedFor(format);
+    }
     notifyListeners();
+  }
+
+  /// Replace the global subtitle config (applies to every item that doesn't
+  /// have a per-item override). Used by the global Subtitles card shown in
+  /// [QualityMode.global].
+  void setGlobalSubtitles(SubtitleSettings s) {
+    final snapped = _snapEmbedAgainstGlobalFormat(s);
+    if (snapped == _globalSubtitles) return;
+    _globalSubtitles = snapped;
+    notifyListeners();
+  }
+
+  /// Replace one item's per-item subtitle override. Pass `null` to clear it
+  /// and fall back to the global setting.
+  void setItemSubtitleSettings(QueueItem item, SubtitleSettings? s) {
+    if (s == null) {
+      item.subtitleSettings = null;
+    } else {
+      final fmt = item.selectedOutputFormat;
+      item.subtitleSettings = fmt == null ? s : s.snapEmbedFor(fmt);
+    }
+    notifyListeners();
+  }
+
+  /// Re-evaluate whether the global subtitles' embed flag is still legal
+  /// against the current global output format. We pick the most common
+  /// output ext across items as the "global" format — if every item is the
+  /// same that's their format; if they differ we keep embed regardless and
+  /// let per-item snapping handle the mixed cases.
+  SubtitleSettings _snapEmbedAgainstGlobalFormat(SubtitleSettings s) {
+    if (!s.embed) return s;
+    if (_items.isEmpty) return s;
+    final exts = _items
+        .map((i) => i.selectedOutputFormat?.ext)
+        .whereType<String>()
+        .toSet();
+    if (exts.length == 1 &&
+        !kEmbedSubsSupportedExts.contains(exts.first)) {
+      return s.copyWith(embed: false);
+    }
+    return s;
   }
 
   /// Apply a global quality override to every item. Used by the "Apply to
@@ -369,6 +429,12 @@ class DownloadQueueController extends ChangeNotifier {
   void setGlobalOutputFormat(OutputFormat? format) {
     for (final item in _items) {
       item.selectedOutputFormat = format;
+      if (format != null && item.subtitleSettings != null) {
+        item.subtitleSettings = item.subtitleSettings!.snapEmbedFor(format);
+      }
+    }
+    if (format != null) {
+      _globalSubtitles = _globalSubtitles.snapEmbedFor(format);
     }
     notifyListeners();
   }
@@ -541,6 +607,15 @@ class DownloadQueueController extends ChangeNotifier {
     final outputExt =
         item.selectedOutputFormat?.ext ?? _appSettings.defaultFormat;
 
+    // Choose the subtitle config: per-item override (when set in
+    // QualityMode.perItem) takes precedence over the global setting. We
+    // pass `null` when the chosen settings are disabled so the service
+    // skips all the subtitle flags.
+    final SubtitleSettings effectiveSubs =
+        item.subtitleSettings ?? _globalSubtitles;
+    final SubtitleSettings? subsForService =
+        effectiveSubs.enabled ? effectiveSubs : null;
+
     item.handle = _service.download(
       // Prefer the richer metadata from a preview pass when we have it;
       // otherwise synthesise a minimal one from what addUrls/addEntries
@@ -559,6 +634,7 @@ class DownloadQueueController extends ChangeNotifier {
       outputExt: outputExt,
       rateLimit: rateLimit,
       keepPartial: _appSettings.keepPartial,
+      subtitles: subsForService,
     );
 
     item.subscription = item.handle!.stream.listen(

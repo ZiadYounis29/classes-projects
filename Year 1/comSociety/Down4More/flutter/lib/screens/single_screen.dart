@@ -5,11 +5,13 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/single_download_controller.dart';
 import '../models/download_progress.dart';
+import '../models/subtitle_settings.dart';
 import '../settings/app_settings.dart';
 import '../widgets/download_progress_view.dart';
 import '../widgets/format_dropdown.dart';
 import '../widgets/metadata_card.dart';
 import '../widgets/quality_dropdown.dart';
+import '../widgets/subtitle_input.dart';
 import '../widgets/trim_input.dart';
 
 /// Single-URL download screen.
@@ -43,6 +45,20 @@ class _SingleScreenState extends State<SingleScreen> {
     // Sync the filename text field when the controller updates it
     // (e.g. after metadata fetch or trim change).
     _controller.addListener(_syncFilenameField);
+  }
+
+  /// Build the initial subtitle config off the user's saved defaults so
+  /// flipping the master switch on doesn't dump them into "en / srt" when
+  /// they configured something else in Settings.
+  SubtitleSettings _initialSubtitles() {
+    final s = widget.appSettings;
+    final base = _controller.subtitles;
+    if (base != SubtitleSettings.disabled) return base;
+    return SubtitleSettings(
+      enabled: false,
+      language: s?.defaultSubtitleLang ?? 'en',
+      format: s?.defaultSubtitleFormat ?? 'srt',
+    );
   }
 
   void _syncFilenameField() {
@@ -162,12 +178,15 @@ class _SingleScreenState extends State<SingleScreen> {
                       enabled: !isDownloading,
                       onChanged: _controller.selectOutputFormat,
                     ),
-                    const SizedBox(height: 12),
-                    TrimInput(
-                      enabled: !isDownloading,
+                    const SizedBox(height: 16),
+                    _SliceAndSubtitlesSection(
+                      isDownloading: isDownloading,
                       videoDuration: metadata.duration,
-                      onChanged: (start, end) =>
+                      onTrimChanged: (start, end) =>
                           _controller.setTrim(start: start, end: end),
+                      subtitles: _initialSubtitles(),
+                      outputFormat: selectedOutput,
+                      onSubtitlesChanged: _controller.setSubtitleSettings,
                     ),
                     const SizedBox(height: 12),
                     TextField(
@@ -246,6 +265,99 @@ class _Header extends StatelessWidget {
           style: theme.textTheme.bodyMedium?.copyWith(
             color: scheme.onSurfaceVariant,
           ),
+        ),
+      ],
+    );
+  }
+}
+
+/// Two-column "Slice & subtitles" group.
+///
+/// Above ~620 dp the trim card and the subtitle card sit side-by-side; below
+/// that they stack so neither widget gets squeezed. The header is always
+/// shown so the user knows the two cards are conceptually grouped — both
+/// are *optional* extras you opt into per download, distinct from the
+/// always-present quality / format / filename rows above.
+class _SliceAndSubtitlesSection extends StatelessWidget {
+  const _SliceAndSubtitlesSection({
+    required this.isDownloading,
+    required this.videoDuration,
+    required this.onTrimChanged,
+    required this.subtitles,
+    required this.outputFormat,
+    required this.onSubtitlesChanged,
+  });
+
+  final bool isDownloading;
+  final Duration? videoDuration;
+  final void Function(Duration?, Duration?) onTrimChanged;
+  final SubtitleSettings subtitles;
+  final dynamic outputFormat; // OutputFormat — kept dynamic to avoid an extra
+  // import alias here; the SubtitleInput widget itself is strongly typed.
+  final ValueChanged<SubtitleSettings> onSubtitlesChanged;
+
+  static const double _stackThreshold = 620;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+
+    Widget trim() => TrimInput(
+          enabled: !isDownloading,
+          videoDuration: videoDuration,
+          onChanged: onTrimChanged,
+        );
+
+    Widget subs() => SubtitleInput(
+          enabled: !isDownloading,
+          value: subtitles,
+          outputFormat: outputFormat,
+          onChanged: onSubtitlesChanged,
+        );
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.only(bottom: 8, left: 4),
+          child: Row(
+            children: [
+              Icon(Icons.tune, size: 16, color: scheme.onSurfaceVariant),
+              const SizedBox(width: 6),
+              Text(
+                'Slice & subtitles',
+                style: theme.textTheme.labelLarge?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth < _stackThreshold) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  trim(),
+                  const SizedBox(height: 12),
+                  subs(),
+                ],
+              );
+            }
+            return IntrinsicHeight(
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: trim()),
+                  const SizedBox(width: 12),
+                  Expanded(child: subs()),
+                ],
+              ),
+            );
+          },
         ),
       ],
     );
