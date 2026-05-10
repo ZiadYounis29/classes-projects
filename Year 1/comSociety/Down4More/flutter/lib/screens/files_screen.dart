@@ -163,8 +163,8 @@ class _FilesScreenState extends State<FilesScreen> {
     );
     if (confirmed == true) {
       try {
-        if (isDir) {
-          await (entity as Directory).delete(recursive: true);
+        if (entity is Directory) {
+          await entity.delete(recursive: true);
         } else {
           await entity.delete();
         }

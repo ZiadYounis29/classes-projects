@@ -71,9 +71,29 @@ void main() {
         'duration': 95,
         'thumbnail': 'https://example.com/t.jpg',
         'formats': <Map<String, dynamic>>[
-          {'format_id': '137', 'height': 1080, 'filesize': 50 * 1024 * 1024},
-          {'format_id': '136', 'height': 720, 'filesize': 25 * 1024 * 1024},
-          {'format_id': '140', 'acodec': 'mp4a.40.2', 'filesize': 5 * 1024 * 1024},
+          // Video-only streams: vcodec set, acodec='none'. parseFormatList
+          // requires this to count an entry into the per-height size map.
+          {
+            'format_id': '137',
+            'height': 1080,
+            'vcodec': 'avc1.640028',
+            'acodec': 'none',
+            'filesize': 50 * 1024 * 1024,
+          },
+          {
+            'format_id': '136',
+            'height': 720,
+            'vcodec': 'avc1.4d401f',
+            'acodec': 'none',
+            'filesize': 25 * 1024 * 1024,
+          },
+          // Audio-only stream.
+          {
+            'format_id': '140',
+            'vcodec': 'none',
+            'acodec': 'mp4a.40.2',
+            'filesize': 5 * 1024 * 1024,
+          },
         ],
       });
       final svc = YtDlpService(

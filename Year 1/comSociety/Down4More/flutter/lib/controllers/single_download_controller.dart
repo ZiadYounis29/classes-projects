@@ -78,10 +78,12 @@ class SingleDownloadController extends ChangeNotifier {
       if (_selectedFormat?.isAudioOnly == true &&
           _selectedOutputFormat.category == OutputCategory.video) {
         // Quality is audio-only: switch to default audio format.
-        _selectedOutputFormat = _appSettings != null
-            ? (kAudioFormats.firstWhere(
-                (f) => f.ext == _appSettings!.defaultAudioFormat,
-                orElse: () => kDefaultAudioFormat))
+        final s = _appSettings;
+        _selectedOutputFormat = s != null
+            ? kAudioFormats.firstWhere(
+                (f) => f.ext == s.defaultAudioFormat,
+                orElse: () => kDefaultAudioFormat,
+              )
             : kDefaultAudioFormat;
       }
       // (If quality is video and format is already video, no snap needed —
@@ -137,19 +139,22 @@ class SingleDownloadController extends ChangeNotifier {
     // When the user switches between a video quality and audio-only (or vice
     // versa), snap the output format to a sensible default for that category
     // so the two dropdowns stay in sync automatically.
+    final s = _appSettings;
     if (format.isAudioOnly &&
         _selectedOutputFormat.category == OutputCategory.video) {
-      _selectedOutputFormat = _appSettings != null
-          ? (kAudioFormats.firstWhere(
-              (f) => f.ext == _appSettings!.defaultAudioFormat,
-              orElse: () => kDefaultAudioFormat))
+      _selectedOutputFormat = s != null
+          ? kAudioFormats.firstWhere(
+              (f) => f.ext == s.defaultAudioFormat,
+              orElse: () => kDefaultAudioFormat,
+            )
           : kDefaultAudioFormat;
     } else if (!format.isAudioOnly &&
         _selectedOutputFormat.category == OutputCategory.audio) {
-      _selectedOutputFormat = _appSettings != null
-          ? (kVideoFormats.firstWhere(
-              (f) => f.ext == _appSettings!.defaultFormat,
-              orElse: () => kDefaultVideoFormat))
+      _selectedOutputFormat = s != null
+          ? kVideoFormats.firstWhere(
+              (f) => f.ext == s.defaultFormat,
+              orElse: () => kDefaultVideoFormat,
+            )
           : kDefaultVideoFormat;
     }
     notifyListeners();

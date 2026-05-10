@@ -11,6 +11,24 @@ import '../models/video_metadata.dart';
 import '../services/ytdlp_service.dart';
 import '../settings/app_settings.dart';
 
+/// Title strings yt-dlp returns from `--flat-playlist` when it has no real
+/// title yet (Vimeo showcases especially). Used by [previewItem] and
+/// [_startItem] to decide whether the row title should be replaced with the
+/// real one once full metadata is fetched.
+const Set<String> _kPlaceholderTitles = {'Unknown', 'Unknown title', 'NA'};
+
+/// Quality / format selection mode for a queue.
+///
+/// - [global]: a single Quality + Format dropdown above the queue applies to
+///   every item (lighter UI, but no per-item override).
+/// - [perItem]: each row exposes its own Quality + Format dropdowns next to
+///   the size chip (heavier UI, but matches the Single screen workflow).
+///
+/// Default is [QualityMode.global]. Settable via
+/// [DownloadQueueController.setQualityMode]. The screens use this to swap
+/// between the global picker card and the per-row dropdowns.
+enum QualityMode { global, perItem }
+
 /// One item in the download queue.
 ///
 /// In the original PR-3 batch screen this only had [url], [title] and
@@ -58,9 +76,14 @@ class QueueItem {
 /// gets queued, downloads in parallel up to [AppSettings.concurrency],
 /// and finishes / errors / cancels independently.
 ///
-/// Per-item state can be overridden via [setItemFormat],
-/// [setItemOutputFormat], and [previewItem]. Group-folder support is
-/// configured via [setGroupFolder].
+/// Quality + format selection follows the controller's [qualityMode]:
+/// - [QualityMode.global] (default) drives every item via
+///   [setGlobalQualityPreset] / [setGlobalOutputFormat].
+/// - [QualityMode.perItem] lets each row override its own quality + format
+///   via [setItemFormat] / [setItemOutputFormat].
+///
+/// Per-item metadata fetches go through [previewItem]. Group-folder support
+/// is configured via [setGroupFolder].
 class DownloadQueueController extends ChangeNotifier {
   DownloadQueueController({
     required AppSettings appSettings,
@@ -83,8 +106,34 @@ class DownloadQueueController extends ChangeNotifier {
   int? _qualityTargetHeight;   // null = best, positive = max height
   bool _qualityAudioOnly = false;
 
+  // ── Quality selection mode (global vs per-item) ──
+  QualityMode _qualityMode = QualityMode.global;
+
   bool get groupFolderEnabled => _groupFolderEnabled;
   String get groupFolderName => _groupFolderName;
+  QualityMode get qualityMode => _qualityMode;
+
+  /// Switch the queue between [QualityMode.global] and [QualityMode.perItem].
+  ///
+  /// When switching back to [QualityMode.global] we re-apply the most recent
+  /// global preset so every row "snaps" to one quality — otherwise the rows
+  /// would keep whatever the user last tweaked per-item, which is confusing
+  /// when the per-item dropdowns disappear.
+  void setQualityMode(QualityMode mode) {
+    if (_qualityMode == mode) return;
+    _qualityMode = mode;
+    if (mode == QualityMode.global) {
+      // Re-apply the stored preset so every row aligns with the global pick.
+      for (final item in _items) {
+        if (item.metadata == null) {
+          item.selectedFormat = null;
+        } else {
+          _applyPresetToItem(item);
+        }
+      }
+    }
+    notifyListeners();
+  }
 
   /// Configure the optional sub-folder all items will land in.
   ///
@@ -275,11 +324,12 @@ class DownloadQueueController extends ChangeNotifier {
   /// [targetHeight] == null means "Best available".
   /// [audioOnly]   == true  means pick the audio-only format (lowest height).
   ///
-  /// For each item that already has metadata we pick the format whose height
-  /// is closest to (but not exceeding) [targetHeight]. If no format has a
-  /// height <= targetHeight we fall back to the lowest-height format.
-  /// Items without metadata yet get [selectedFormat] = null so the queue
-  /// falls back to the `bv*+ba/b` selector at download time.
+  /// For each item that already has metadata we delegate to
+  /// [_applyPresetToItem] (the same logic [_startItem] uses for items whose
+  /// metadata arrives later). Items without metadata yet get
+  /// [selectedFormat] = null so the queue falls back to the `bv*+ba/b`
+  /// selector at download time — unless [_startItem] manages to fetch
+  /// metadata first, in which case the preset is reapplied there.
   void setGlobalQualityPreset({int? targetHeight, bool audioOnly = false}) {
     // Persist so _startItem can apply it to items whose metadata isn't
     // available yet when this is called (e.g. playlist items before preview).
@@ -291,39 +341,7 @@ class DownloadQueueController extends ChangeNotifier {
         item.selectedFormat = null;
         continue;
       }
-      final formats = item.metadata!.formats;
-      if (formats.isEmpty) {
-        item.selectedFormat = null;
-        continue;
-      }
-
-      if (audioOnly) {
-        // Pick the first audio-only format (they're sorted best-first).
-        final audio = formats.firstWhere(
-          (f) => f.isAudioOnly,
-          orElse: () => formats.last,
-        );
-        item.selectedFormat = audio;
-        continue;
-      }
-
-      if (targetHeight == null) {
-        // Best available → first format.
-        item.selectedFormat = formats.first;
-        continue;
-      }
-
-      // Find the best format whose height <= targetHeight.
-      final candidates =
-          formats.where((f) => f.height != null && f.height! <= targetHeight).toList();
-      if (candidates.isNotEmpty) {
-        // formats are sorted best-first, so first candidate is best match.
-        item.selectedFormat = candidates.first;
-      } else {
-        // All formats exceed target; pick the lowest resolution available.
-        final withHeight = formats.where((f) => f.height != null).toList();
-        item.selectedFormat = withHeight.isNotEmpty ? withHeight.last : formats.last;
-      }
+      _applyPresetToItem(item);
     }
     notifyListeners();
   }
@@ -358,9 +376,8 @@ class DownloadQueueController extends ChangeNotifier {
       //      titles — common on Vimeo showcases.
       // Without case 3 the row title would stay as "Unknown" even after
       // the per-item preview has fetched the real title.
-      const placeholders = {'Unknown', 'Unknown title', 'NA'};
       final t = item.title.trim();
-      if (t.isEmpty || t == item.url || placeholders.contains(t)) {
+      if (t.isEmpty || t == item.url || _kPlaceholderTitles.contains(t)) {
         item.title = m.title;
       }
       item.thumbnailUrl ??= m.thumbnailUrl;
@@ -474,9 +491,8 @@ class DownloadQueueController extends ChangeNotifier {
       try {
         final m = await _service.fetchMetadata(item.url);
         item.metadata = m;
-        const placeholders = {'Unknown', 'Unknown title', 'NA'};
         final t = item.title.trim();
-        if (t.isEmpty || t == item.url || placeholders.contains(t)) {
+        if (t.isEmpty || t == item.url || _kPlaceholderTitles.contains(t)) {
           item.title = m.title;
         }
         item.thumbnailUrl ??= m.thumbnailUrl;
