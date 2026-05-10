@@ -5,7 +5,6 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/download_queue_controller.dart';
 import '../models/download_progress.dart';
-import '../models/output_format.dart';
 import 'format_dropdown.dart' show formatBytes;
 
 /// One row in the Playlist / Batch queue list.
@@ -61,14 +60,14 @@ class QueueItemRow extends StatelessWidget {
               ],
             ),
 
-            // Per-item dropdowns when metadata is available + the item is
-            // not actively downloading. Hidden during preview-fetch errors.
+            // Quality chip — shows the selected quality label + file size for
+            // this item. Quality is now chosen globally above the list.
             if (item.metadata != null &&
                 item.previewError == null &&
                 progress.phase != DownloadPhase.downloading &&
                 progress.phase != DownloadPhase.trimming) ...[
-              const SizedBox(height: 10),
-              _buildPerItemDropdowns(context),
+              const SizedBox(height: 6),
+              _buildQualityChip(context),
             ],
 
             // Inline preview-fetch error.
@@ -208,104 +207,29 @@ class QueueItemRow extends StatelessWidget {
     return parts.join(' · ');
   }
 
-  Widget _buildPerItemDropdowns(BuildContext context) {
-    final theme = Theme.of(context);
+  Widget _buildQualityChip(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     final m = item.metadata!;
     final selectedFormat = item.selectedFormat ?? m.formats.first;
-    final selectedOutput = item.selectedOutputFormat ??
-        (selectedFormat.isAudioOnly ? kDefaultAudioFormat : kDefaultVideoFormat);
-    final formats =
-        selectedFormat.isAudioOnly ? kAudioFormats : kVideoFormats;
-    final outputBytes = selectedOutput.estimateBytes(
-      sourceVideoBytes: selectedFormat.fileSize,
-      duration: m.duration,
-    );
 
-    return Wrap(
-      spacing: 12,
-      runSpacing: 8,
-      crossAxisAlignment: WrapCrossAlignment.center,
-      children: [
-        // Quality dropdown — compact form.
-        // Width is 260 (was 220) and `isExpanded: true` so the selected
-        // value plus its size suffix (e.g. `Best available · 301 MB`) lays
-        // out inside the dropdown's content area instead of overflowing
-        // past the trailing arrow. Without isExpanded the InputDecoration
-        // sized the inner Row to its intrinsic width and hit a 160 px
-        // constraint that clipped long labels with a yellow/black stripe.
-        SizedBox(
-          width: 260,
-          child: DropdownButtonFormField<String>(
-            isDense: true,
-            isExpanded: true,
-            value: selectedFormat.id,
-            decoration: const InputDecoration(
-              labelText: 'Quality',
-              isDense: true,
-              prefixIcon: Icon(Icons.high_quality_outlined, size: 18),
-            ),
-            items: [
-              for (final f in m.formats)
-                DropdownMenuItem(
-                  value: f.id,
-                  child: Text(
-                    f.fileSize != null
-                        ? '${f.label}  ·  ${formatBytes(f.fileSize!)}'
-                        : f.label,
-                    style: theme.textTheme.bodySmall,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-            onChanged: (id) {
-              if (id == null) return;
-              final picked = m.formats.firstWhere((f) => f.id == id);
-              queue.setItemFormat(item, picked);
-              // If quality category changed (audio↔video) reset the output.
-              if (picked.isAudioOnly !=
-                      (item.selectedOutputFormat?.isAudio ?? false) &&
-                  picked.isAudioOnly) {
-                queue.setItemOutputFormat(item, kDefaultAudioFormat);
-              } else if (!picked.isAudioOnly &&
-                  (item.selectedOutputFormat?.isAudio ?? false)) {
-                queue.setItemOutputFormat(item, kDefaultVideoFormat);
-              }
-            },
-          ),
+    // Only show the size chip — the quality label ("Best available", "1080p",
+    // etc.) is already conveyed by the global picker above the list.
+    if (selectedFormat.fileSize == null) return const SizedBox.shrink();
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        formatBytes(selectedFormat.fileSize!),
+        style: TextStyle(
+          fontSize: 11,
+          color: scheme.onSurfaceVariant,
+          fontWeight: FontWeight.w500,
         ),
-        // Format dropdown — compact form.
-        SizedBox(
-          width: 260,
-          child: DropdownButtonFormField<String>(
-            isDense: true,
-            isExpanded: true,
-            value: selectedOutput.ext,
-            decoration: const InputDecoration(
-              labelText: 'Format',
-              isDense: true,
-              prefixIcon: Icon(Icons.movie_outlined, size: 18),
-            ),
-            items: [
-              for (final f in formats)
-                DropdownMenuItem(
-                  value: f.ext,
-                  child: Text(
-                    outputBytes != null && f.ext == selectedOutput.ext
-                        ? '${f.label}  ·  ~${formatBytes(outputBytes)}'
-                        : f.label,
-                    style: theme.textTheme.bodySmall,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-            ],
-            onChanged: (ext) {
-              if (ext == null) return;
-              final picked = formats.firstWhere((f) => f.ext == ext);
-              queue.setItemOutputFormat(item, picked);
-            },
-          ),
-        ),
-      ],
+      ),
     );
   }
 

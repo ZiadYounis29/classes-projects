@@ -182,6 +182,7 @@ class YtDlpService {
     Duration? trimStart,
     Duration? trimEnd,
     String? rateLimit,
+    bool keepPartial = false,
   }) {
     final controller = StreamController<DownloadProgress>.broadcast();
     final processCompleter = Completer<Process>();
@@ -301,15 +302,15 @@ class YtDlpService {
       await stderrSub.cancel();
 
       if (state.cancelled) {
-        // Clean up any partial temp file.
-        _deleteTempFile(state.outputPath);
+        // Clean up any partial temp file, unless the user wants to keep it.
+        if (!keepPartial) _deleteTempFile(state.outputPath);
         controller.add(const DownloadProgress(phase: DownloadPhase.cancelled));
         await controller.close();
         return;
       }
 
       if (code != 0) {
-        _deleteTempFile(state.outputPath);
+        if (!keepPartial) _deleteTempFile(state.outputPath);
         controller.add(
           DownloadProgress(
             phase: DownloadPhase.error,

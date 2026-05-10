@@ -106,33 +106,13 @@ class _TrimInputState extends State<TrimInput> {
     final hasTrim = _startController.text.trim().isNotEmpty ||
         _endController.text.trim().isNotEmpty;
 
-    // Soft "active" treatment: when the trim has values, we shift the card
-    // into a primaryContainer tint instead of using the raw `primary` color.
-    // On a vivid theme like Crimson, primary is bright red and reads as an
-    // *error* state next to the actual error UI. primaryContainer is a
-    // softer derived tone — it says "selection" without competing with the
-    // error banner below.
-    final Color cardColor = hasTrim
-        ? Color.alphaBlend(
-            scheme.primaryContainer.withValues(alpha: 0.45),
-            scheme.surfaceContainerLow,
-          )
-        : scheme.surfaceContainerLow;
-    final Color borderColor = hasTrim
-        ? scheme.primary.withValues(alpha: 0.40)
-        : scheme.outlineVariant;
-    final Color titleColor =
-        hasTrim ? scheme.onPrimaryContainer : scheme.onSurface;
-    final Color iconColor =
-        hasTrim ? scheme.onPrimaryContainer : scheme.onSurfaceVariant;
-
     return Card(
       margin: EdgeInsets.zero,
-      color: cardColor,
+      color: scheme.surfaceContainerLow,
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: borderColor),
+        side: BorderSide(color: scheme.outlineVariant),
       ),
       child: Column(
         children: [
@@ -149,38 +129,16 @@ class _TrimInputState extends State<TrimInput> {
                   Icon(
                     Icons.content_cut_rounded,
                     size: 18,
-                    color: iconColor,
+                    color: hasTrim ? scheme.primary : scheme.onSurfaceVariant,
                   ),
                   const SizedBox(width: 10),
                   Text(
                     'Trim segment',
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w600,
-                      color: titleColor,
+                      color: hasTrim ? scheme.primary : scheme.onSurface,
                     ),
                   ),
-                  if (hasTrim) ...[
-                    const SizedBox(width: 8),
-                    // Compact "Active" pill so the selection state is
-                    // unambiguous independent of color.
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 8,
-                        vertical: 2,
-                      ),
-                      decoration: BoxDecoration(
-                        color: scheme.secondaryContainer,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: Text(
-                        'Active',
-                        style: theme.textTheme.labelSmall?.copyWith(
-                          color: scheme.onSecondaryContainer,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ],
                   const SizedBox(width: 8),
                   // Show the current range as a hint when collapsed.
                   if (!_expanded && hasTrim)
@@ -250,9 +208,7 @@ class _TrimInputState extends State<TrimInput> {
                     ],
                   ),
 
-                  // ── Vibrant warning banners ─────────────────────────────────────
-                  // Replace the dim default `errorText` underline with an
-                  // explicit, high-contrast banner per affected field.
+                  // ── Warning banners ──────────────────────────────────────
                   if (_startError != null) ...[
                     const SizedBox(height: 10),
                     _WarningBanner(

@@ -5,6 +5,10 @@ import 'format_dropdown.dart' show formatBytes;
 
 /// Dropdown of curated qualities for a fetched video. Appears under the
 /// metadata card.
+///
+/// All qualities (video rungs + audio-only) are always shown so the user
+/// can switch modes from either dropdown. The [FormatDropdown] handles
+/// showing only formats relevant to the chosen quality category.
 class QualityDropdown extends StatelessWidget {
   const QualityDropdown({
     super.key,
@@ -21,8 +25,12 @@ class QualityDropdown extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // Guard: if selected isn't in the list, fall back to first item.
+    final effectiveSelected =
+        formats.any((f) => f.id == selected?.id) ? selected : formats.firstOrNull;
+
     return DropdownButtonFormField<String>(
-      value: selected?.id,
+      value: effectiveSelected?.id,
       isExpanded: true,
       decoration: const InputDecoration(
         labelText: 'Quality',

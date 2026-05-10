@@ -91,6 +91,22 @@ class SettingsScreen extends StatelessWidget {
               max: 8,
               onChanged: appSettings.setConcurrency,
             ),
+            const SizedBox(height: 8),
+            _SwitchTile(
+              icon: Icons.folder_copy_outlined,
+              title: 'Batch: save into subfolder',
+              subtitle: 'Create a named subfolder for each batch by default',
+              value: appSettings.batchFolder,
+              onChanged: appSettings.setBatchFolder,
+            ),
+            const SizedBox(height: 8),
+            _SwitchTile(
+              icon: Icons.playlist_add_check_outlined,
+              title: 'Playlist: save into subfolder',
+              subtitle: 'Create a named subfolder for each playlist by default',
+              value: appSettings.playlistFolder,
+              onChanged: appSettings.setPlaylistFolder,
+            ),
             const SizedBox(height: 32),
 
             // ── Network ─────────────────────────────────────────────────────
@@ -393,9 +409,8 @@ class _FormatTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final theme  = Theme.of(context);
-    final fmt    = appSettings.defaultFormat;
-    final videoVal = _videoExts.contains(fmt) ? fmt : 'mp4';
-    final audioVal = _audioExts.contains(fmt) ? fmt : 'm4a';
+    final videoVal = _videoExts.contains(appSettings.defaultFormat) ? appSettings.defaultFormat : 'mp4';
+    final audioVal = _audioExts.contains(appSettings.defaultAudioFormat) ? appSettings.defaultAudioFormat : 'm4a';
 
     return _SettingCard(
       child: Column(
@@ -449,7 +464,7 @@ class _FormatTile extends StatelessWidget {
                         EdgeInsets.symmetric(horizontal: 12, vertical: 10),
                   ),
                   items: _audioItems,
-                  onChanged: (v) { if (v != null) appSettings.setDefaultFormat(v); },
+                  onChanged: (v) { if (v != null) appSettings.setDefaultAudioFormat(v); },
                 ),
               ),
             ],

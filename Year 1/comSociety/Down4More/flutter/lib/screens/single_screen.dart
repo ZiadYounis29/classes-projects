@@ -153,7 +153,7 @@ class _SingleScreenState extends State<SingleScreen> {
                     const SizedBox(height: 12),
                     FormatDropdown(
                       selected: selectedOutput,
-                      isAudioOnly: selected?.isAudioOnly ?? false,
+                      isAudioOnly: selectedOutput.isAudio,
                       // Drive the per-row size estimate from whichever
                       // quality the user just picked. Switching quality
                       // re-renders the dropdown so the chip updates live.

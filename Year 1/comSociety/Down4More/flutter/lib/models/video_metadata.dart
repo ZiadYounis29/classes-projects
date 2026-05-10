@@ -155,14 +155,37 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
     final size = (f['filesize'] as num?) ?? (f['filesize_approx'] as num?);
     if (size == null) continue;
     final bytes = size.round();
-    if (h != null) {
+    final acodec = f['acodec'] as String? ?? 'none';
+    final vcodec = f['vcodec'] as String? ?? 'none';
+    if (h != null && vcodec != 'none' && acodec == 'none') {
+      // Video-only stream — safe to add audio size on top later.
       final prev = videoSizesByHeight[h];
       if (prev == null || bytes > prev) videoSizesByHeight[h] = bytes;
-    } else if ((f['acodec'] as String?) != 'none' &&
-        (f['vcodec'] as String? ?? 'none') == 'none') {
+    } else if (vcodec == 'none' && acodec != 'none') {
       // Audio-only format. yt-dlp marks vcodec='none' for these.
       if (bestAudioSize == null || bytes > bestAudioSize) {
         bestAudioSize = bytes;
+      }
+    }
+    // Muxed formats (both vcodec and acodec present) are skipped:
+    // using them would double-count audio when we add bestAudioSize below.
+  }
+
+  // Fallback: if no video-only stream sizes were found (some platforms only
+  // report sizes for muxed formats), collect muxed sizes instead. In that
+  // case we do NOT add bestAudioSize on top — audio is already included.
+  final bool useMuxedFallback = videoSizesByHeight.isEmpty;
+  if (useMuxedFallback) {
+    for (final f in rawFormats) {
+      final h = (f['height'] as num?)?.round();
+      final size = (f['filesize'] as num?) ?? (f['filesize_approx'] as num?);
+      if (size == null || h == null) continue;
+      final acodec = f['acodec'] as String? ?? 'none';
+      final vcodec = f['vcodec'] as String? ?? 'none';
+      if (vcodec != 'none' && acodec != 'none') {
+        final bytes = size.round();
+        final prev = videoSizesByHeight[h];
+        if (prev == null || bytes > prev) videoSizesByHeight[h] = bytes;
       }
     }
   }
@@ -171,8 +194,8 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
   final hasAnyHeight = availableHeights.isNotEmpty;
   final topHeight = hasAnyHeight ? availableHeights.last : null;
 
-  /// Sum of "biggest video at height ≤ ceiling" plus best audio. Returns
-  /// `null` when neither side is known so the UI just hides the size chip.
+  /// Best video size at or below [ceiling] plus audio (unless muxed fallback).
+  /// Returns null when nothing is known so the UI hides the size chip.
   int? sizeForCeiling(int? ceiling) {
     int? video;
     for (final h in availableHeights) {
@@ -182,7 +205,9 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
       if (video == null || s > video) video = s;
     }
     if (video == null && bestAudioSize == null) return null;
-    return (video ?? 0) + (bestAudioSize ?? 0);
+    // When using muxed sizes the audio is already baked in — don't add it again.
+    final audioAdd = useMuxedFallback ? 0 : (bestAudioSize ?? 0);
+    return (video ?? 0) + audioAdd;
   }
 
   final out = <VideoFormat>[
@@ -198,7 +223,7 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
   ];
 
   // Common resolution rungs. Only show ones the source actually has.
-  const ladder = <int>[2160, 1440, 1080, 720, 480, 360, 240];
+  const ladder = <int>[2160, 1440, 1080, 720, 480, 360, 240, 144];
   for (final h in ladder) {
     final hasIt = availableHeights.any((avail) => avail >= h);
     if (!hasIt) continue;

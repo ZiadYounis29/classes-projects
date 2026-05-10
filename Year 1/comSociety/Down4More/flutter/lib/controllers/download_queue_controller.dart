@@ -79,6 +79,10 @@ class DownloadQueueController extends ChangeNotifier {
   bool _groupFolderEnabled = false;
   String _groupFolderName = '';
 
+  // ── Stored quality preset (applied per-item when metadata is fetched) ──
+  int? _qualityTargetHeight;   // null = best, positive = max height
+  bool _qualityAudioOnly = false;
+
   bool get groupFolderEnabled => _groupFolderEnabled;
   String get groupFolderName => _groupFolderName;
 
@@ -266,6 +270,64 @@ class DownloadQueueController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Apply a global quality preset to every item by target height.
+  ///
+  /// [targetHeight] == null means "Best available".
+  /// [audioOnly]   == true  means pick the audio-only format (lowest height).
+  ///
+  /// For each item that already has metadata we pick the format whose height
+  /// is closest to (but not exceeding) [targetHeight]. If no format has a
+  /// height <= targetHeight we fall back to the lowest-height format.
+  /// Items without metadata yet get [selectedFormat] = null so the queue
+  /// falls back to the `bv*+ba/b` selector at download time.
+  void setGlobalQualityPreset({int? targetHeight, bool audioOnly = false}) {
+    // Persist so _startItem can apply it to items whose metadata isn't
+    // available yet when this is called (e.g. playlist items before preview).
+    _qualityTargetHeight = targetHeight;
+    _qualityAudioOnly = audioOnly;
+
+    for (final item in _items) {
+      if (item.metadata == null) {
+        item.selectedFormat = null;
+        continue;
+      }
+      final formats = item.metadata!.formats;
+      if (formats.isEmpty) {
+        item.selectedFormat = null;
+        continue;
+      }
+
+      if (audioOnly) {
+        // Pick the first audio-only format (they're sorted best-first).
+        final audio = formats.firstWhere(
+          (f) => f.isAudioOnly,
+          orElse: () => formats.last,
+        );
+        item.selectedFormat = audio;
+        continue;
+      }
+
+      if (targetHeight == null) {
+        // Best available → first format.
+        item.selectedFormat = formats.first;
+        continue;
+      }
+
+      // Find the best format whose height <= targetHeight.
+      final candidates =
+          formats.where((f) => f.height != null && f.height! <= targetHeight).toList();
+      if (candidates.isNotEmpty) {
+        // formats are sorted best-first, so first candidate is best match.
+        item.selectedFormat = candidates.first;
+      } else {
+        // All formats exceed target; pick the lowest resolution available.
+        final withHeight = formats.where((f) => f.height != null).toList();
+        item.selectedFormat = withHeight.isNotEmpty ? withHeight.last : formats.last;
+      }
+    }
+    notifyListeners();
+  }
+
   /// Apply a global output-format override to every item.
   void setGlobalOutputFormat(OutputFormat? format) {
     for (final item in _items) {
@@ -368,8 +430,63 @@ class DownloadQueueController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Apply the stored quality preset to one item that already has metadata.
+  void _applyPresetToItem(QueueItem item) {
+    final m = item.metadata;
+    if (m == null) return;
+    final formats = m.formats;
+    if (formats.isEmpty) return;
+
+    if (_qualityAudioOnly) {
+      item.selectedFormat = formats.firstWhere(
+        (f) => f.isAudioOnly,
+        orElse: () => formats.last,
+      );
+      return;
+    }
+    if (_qualityTargetHeight == null) {
+      item.selectedFormat = formats.first; // Best available
+      return;
+    }
+    final candidates = formats
+        .where((f) => f.height != null && f.height! <= _qualityTargetHeight!)
+        .toList();
+    if (candidates.isNotEmpty) {
+      item.selectedFormat = candidates.first;
+    } else {
+      final withHeight = formats.where((f) => f.height != null).toList();
+      item.selectedFormat =
+          withHeight.isNotEmpty ? withHeight.last : formats.last;
+    }
+  }
+
   Future<void> _startItem(QueueItem item) async {
     final dir = await _resolveOutputDir();
+
+    // If no format is selected yet and no metadata is available, fetch
+    // metadata now and apply the stored quality preset. This handles the
+    // playlist case where setGlobalQualityPreset is called before any
+    // metadata is available (no preview pass), so items would otherwise all
+    // fall back to 'bv*+ba/b' regardless of the user's quality pick.
+    // We always fetch when metadata is missing so the quality chip shows
+    // correctly in the UI and so 'best' gets an explicit selectedFormat too.
+    if (item.selectedFormat == null && item.metadata == null) {
+      try {
+        final m = await _service.fetchMetadata(item.url);
+        item.metadata = m;
+        const placeholders = {'Unknown', 'Unknown title', 'NA'};
+        final t = item.title.trim();
+        if (t.isEmpty || t == item.url || placeholders.contains(t)) {
+          item.title = m.title;
+        }
+        item.thumbnailUrl ??= m.thumbnailUrl;
+        // Apply the stored preset to this item.
+        _applyPresetToItem(item);
+        notifyListeners();
+      } catch (_) {
+        // Metadata fetch failed — fall through to the bv*+ba/b fallback below.
+      }
+    }
 
     // Per-item override → fallback selector.
     final format = item.selectedFormat ??
@@ -406,6 +523,7 @@ class DownloadQueueController extends ChangeNotifier {
       outputDir: dir,
       outputExt: outputExt,
       rateLimit: rateLimit,
+      keepPartial: _appSettings.keepPartial,
     );
 
     item.subscription = item.handle!.stream.listen(

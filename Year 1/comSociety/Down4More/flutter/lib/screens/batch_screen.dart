@@ -8,10 +8,9 @@ import '../widgets/queue_item_row.dart';
 /// Batch download screen.
 ///
 /// Three phases:
-///   1. URLs textarea → "Preview" (renamed from "Download all")
-///   2. Preview pass: rows render as `previewAll(concurrency:2)` resolves
-///      each item's metadata. The user can adjust per-item dropdowns +
-///      group-folder before kicking off the queue.
+///   1. URLs textarea + global format picker → "Preview"
+///   2. Preview pass: rows render as metadata resolves. Configure
+///      group-folder, then start download.
 ///   3. Downloading / done with per-item speed/size/cancel/retry.
 class BatchScreen extends StatefulWidget {
   const BatchScreen({super.key, required this.appSettings});
@@ -30,12 +29,35 @@ class _BatchScreenState extends State<BatchScreen> {
 
   OutputFormat _globalOutput = kDefaultVideoFormat;
 
+  /// Global quality preset: null = Best, -1 = Audio only, positive = max height.
+  int? _globalQualityHeight;
+
   @override
   void initState() {
     super.initState();
     _urlsCtrl = TextEditingController();
     _folderCtrl = TextEditingController();
+    _applySettingsDefaults();
+    // Re-apply defaults whenever the user changes them in Settings, but only
+    // when we're in the initial entry phase (not mid-preview or downloading).
+    widget.appSettings.addListener(_onSettingsChanged);
+  }
+
+  void _onSettingsChanged() {
+    // Only snap to new defaults when no preview/download is in progress,
+    // so we don't silently change the format mid-download.
+    if (!_previewing && !_started) {
+      setState(_applySettingsDefaults);
+    }
+  }
+
+  void _applySettingsDefaults() {
     _globalOutput = _findFormat(widget.appSettings.defaultFormat);
+    _globalQualityHeight = _qualityHeightFromSettings(widget.appSettings.defaultQuality);
+    // If default quality is audio, make sure format is audio too.
+    if (_globalQualityHeight == -1 && _globalOutput.category == OutputCategory.video) {
+      _globalOutput = _findFormat(widget.appSettings.defaultAudioFormat);
+    }
   }
 
   OutputFormat _findFormat(String ext) {
@@ -45,8 +67,20 @@ class _BatchScreenState extends State<BatchScreen> {
     return kDefaultVideoFormat;
   }
 
+  /// Maps settings quality string to the int? used by [_GlobalQualityPicker].
+  int? _qualityHeightFromSettings(String q) {
+    switch (q) {
+      case 'audio': return -1;
+      case 'best':  return null;
+      default:
+        final h = int.tryParse(q.replaceAll('p', ''));
+        return h; // null if unparseable → treated as Best
+    }
+  }
+
   @override
   void dispose() {
+    widget.appSettings.removeListener(_onSettingsChanged);
     _urlsCtrl.dispose();
     _folderCtrl.dispose();
     _queueCtrl?.dispose();
@@ -68,13 +102,9 @@ class _BatchScreenState extends State<BatchScreen> {
     _queueCtrl?.dispose();
     final q = DownloadQueueController(appSettings: widget.appSettings);
     q.addUrls(urls);
-    q.setGlobalOutputFormat(_globalOutput);
 
-    // Default group-folder OFF for batch (user explicitly opts in). Pre-fill
-    // a sensible name based on the first URL — once preview lands we'll
-    // upgrade it to the first item's title.
     _folderCtrl.text = 'Batch';
-    q.setGroupFolder(enabled: false, name: 'Batch');
+    q.setGroupFolder(enabled: widget.appSettings.batchFolder, name: 'Batch');
 
     q.addListener(_onQueueUpdate);
     _queueCtrl = q;
@@ -82,11 +112,9 @@ class _BatchScreenState extends State<BatchScreen> {
     _previewing = true;
     setState(() {});
 
-    // Eager metadata fetch for batch (vs. lazy fetch for playlists).
     await q.previewAll(concurrency: 2);
     if (!mounted) return;
 
-    // Upgrade default folder name to "<first title> batch" once we know it.
     final firstTitled = q.items.firstWhere(
       (i) => i.metadata?.title.trim().isNotEmpty == true,
       orElse: () => q.items.isNotEmpty ? q.items.first : QueueItem(url: '', title: ''),
@@ -95,10 +123,18 @@ class _BatchScreenState extends State<BatchScreen> {
       final t = firstTitled.metadata!.title.trim();
       if (t.isNotEmpty) {
         _folderCtrl.text = '$t batch';
-        // Don't auto-enable; the toggle stays OFF unless the user flips it.
         q.setGroupFolder(enabled: q.groupFolderEnabled, name: _folderCtrl.text);
       }
     }
+
+    // Now that metadata is loaded for all items, apply the current quality
+    // and format selection so size chips show the correct value immediately,
+    // without waiting for the user to touch the quality dropdown.
+    q.setGlobalQualityPreset(
+      targetHeight: _globalQualityHeight == -1 ? null : _globalQualityHeight,
+      audioOnly: _globalQualityHeight == -1,
+    );
+    q.setGlobalOutputFormat(_globalOutput);
 
     setState(() => _previewing = false);
   }
@@ -107,6 +143,13 @@ class _BatchScreenState extends State<BatchScreen> {
     final q = _queueCtrl;
     if (q == null) return;
     q.setGroupFolder(enabled: q.groupFolderEnabled, name: _folderCtrl.text);
+    // Apply quality and format right before download starts, using whatever
+    // the user selected in the configure card.
+    q.setGlobalQualityPreset(
+      targetHeight: _globalQualityHeight == -1 ? null : _globalQualityHeight,
+      audioOnly: _globalQualityHeight == -1,
+    );
+    q.setGlobalOutputFormat(_globalOutput);
     setState(() => _started = true);
     q.startAll();
   }
@@ -155,9 +198,9 @@ class _BatchScreenState extends State<BatchScreen> {
               ),
               const SizedBox(height: 4),
               Text(
-                'Paste a list of URLs (one per line). Hit Preview to fetch '
-                'thumbnails and customize quality / format per video, then '
-                'download them all. Concurrency comes from Settings.',
+                'Paste a list of URLs (one per line), pick a format, then '
+                'hit Preview to fetch thumbnails and customize quality per '
+                'video before downloading.',
                 style: theme.textTheme.bodyMedium?.copyWith(
                   color: scheme.onSurfaceVariant,
                 ),
@@ -216,12 +259,29 @@ class _BatchScreenState extends State<BatchScreen> {
           _ConfigureCard(
             queue: q,
             previewing: _previewing,
+            folderCtrl: _folderCtrl,
             globalOutput: _globalOutput,
-            onGlobalOutputChanged: (f) {
+            globalQualityHeight: _globalQualityHeight,
+            onQualityChanged: (h) {
+              setState(() {
+                _globalQualityHeight = h;
+                if (h == -1 && _globalOutput.category == OutputCategory.video) {
+                  _globalOutput = _findFormat(widget.appSettings.defaultAudioFormat);
+                } else if (h != -1 && _globalOutput.category == OutputCategory.audio) {
+                  _globalOutput = _findFormat(widget.appSettings.defaultFormat);
+                }
+              });
+              // Update per-item selectedFormat so size chips refresh immediately.
+              q.setGlobalQualityPreset(
+                targetHeight: h == -1 ? null : h,
+                audioOnly: h == -1,
+              );
+              q.setGlobalOutputFormat(_globalOutput);
+            },
+            onFormatChanged: (f) {
               setState(() => _globalOutput = f);
               q.setGlobalOutputFormat(f);
             },
-            folderCtrl: _folderCtrl,
             onGroupFolderToggle: (v) {
               q.setGroupFolder(enabled: v, name: _folderCtrl.text);
             },
@@ -247,14 +307,179 @@ class _BatchScreenState extends State<BatchScreen> {
   }
 }
 
-/// Card shown above the queue while the user is configuring (pre-start).
+// ── Global quality picker ──────────────────────────────────────────────────────
+
+/// Quality presets expressed as max-height values.
+/// null  = Best available
+/// -1    = Audio only
+const _kQualityPresets = [
+  (label: 'Best available', height: null),
+  (label: '4K (2160p)', height: 2160),
+  (label: '1440p', height: 1440),
+  (label: '1080p', height: 1080),
+  (label: '720p', height: 720),
+  (label: '480p', height: 480),
+  (label: '360p', height: 360),
+  (label: '240p', height: 240),
+  (label: '144p', height: 144),
+  (label: 'Audio only', height: -1),
+];
+
+class _GlobalQualityPicker extends StatelessWidget {
+  const _GlobalQualityPicker({
+    required this.selectedHeight,
+    required this.onChanged,
+  });
+
+  final int? selectedHeight;
+  final ValueChanged<int?> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final validHeights = _kQualityPresets.map((p) => p.height).toSet();
+    final effectiveHeight =
+        validHeights.contains(selectedHeight) ? selectedHeight : null;
+
+    return DropdownButtonFormField<int?>(
+      value: effectiveHeight,
+      isExpanded: true,
+      decoration: const InputDecoration(
+        labelText: 'Quality for all videos',
+        prefixIcon: Icon(Icons.high_quality_outlined),
+      ),
+      items: [
+        for (final preset in _kQualityPresets)
+          DropdownMenuItem<int?>(
+            value: preset.height,
+            child: _QualityPresetRow(preset: preset, scheme: scheme),
+          ),
+      ],
+      onChanged: (h) => onChanged(h),
+    );
+  }
+}
+
+class _QualityPresetRow extends StatelessWidget {
+  const _QualityPresetRow({required this.preset, required this.scheme});
+  final ({String label, int? height}) preset;
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        if (preset.height != null) ...[
+          Icon(
+            preset.height == -1 ? Icons.audiotrack_outlined : Icons.videocam_outlined,
+            size: 16,
+            color: scheme.onSurfaceVariant,
+          ),
+          const SizedBox(width: 10),
+        ],
+        Text(preset.label),
+      ],
+    );
+  }
+}
+
+// ── Global format picker ──────────────────────────────────────────────────────
+
+class _GlobalFormatPicker extends StatelessWidget {
+  const _GlobalFormatPicker({
+    required this.globalOutput,
+    required this.isAudioOnly,
+    required this.onChanged,
+  });
+
+  final OutputFormat globalOutput;
+  final bool isAudioOnly;
+  final ValueChanged<OutputFormat> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    // Mirror exactly what FormatDropdown does in the Single screen:
+    // show only the relevant category based on the current quality selection.
+    final formats = isAudioOnly ? kAudioFormats : kVideoFormats;
+    final effectiveSelected =
+        formats.contains(globalOutput) ? globalOutput : formats.first;
+
+    return DropdownButtonFormField<String>(
+      value: effectiveSelected.ext,
+      isExpanded: true,
+      decoration: InputDecoration(
+        labelText: 'Format for all videos',
+        prefixIcon: Icon(
+          isAudioOnly ? Icons.audiotrack_outlined : Icons.movie_outlined,
+        ),
+      ),
+      items: [
+        for (final f in formats)
+          DropdownMenuItem(
+            value: f.ext,
+            child: _FormatRow(format: f, scheme: scheme),
+          ),
+      ],
+      onChanged: (ext) {
+        if (ext == null) return;
+        final f = formats.firstWhere((x) => x.ext == ext);
+        onChanged(f);
+      },
+    );
+  }
+}
+
+class _FormatRow extends StatelessWidget {
+  const _FormatRow({required this.format, required this.scheme});
+  final OutputFormat format;
+  final ColorScheme scheme;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+          decoration: BoxDecoration(
+            color: scheme.secondaryContainer,
+            borderRadius: BorderRadius.circular(4),
+          ),
+          child: Text(
+            format.ext.toUpperCase(),
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: scheme.onSecondaryContainer,
+              letterSpacing: 0.5,
+            ),
+          ),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            format.note ?? format.label,
+            style: const TextStyle(fontSize: 13),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ── Configure card (pre-start) ────────────────────────────────────────────────
+
 class _ConfigureCard extends StatelessWidget {
   const _ConfigureCard({
     required this.queue,
     required this.previewing,
-    required this.globalOutput,
-    required this.onGlobalOutputChanged,
     required this.folderCtrl,
+    required this.globalOutput,
+    required this.globalQualityHeight,
+    required this.onQualityChanged,
+    required this.onFormatChanged,
     required this.onGroupFolderToggle,
     required this.onStartDownload,
     required this.onBack,
@@ -262,9 +487,11 @@ class _ConfigureCard extends StatelessWidget {
 
   final DownloadQueueController queue;
   final bool previewing;
-  final OutputFormat globalOutput;
-  final ValueChanged<OutputFormat> onGlobalOutputChanged;
   final TextEditingController folderCtrl;
+  final OutputFormat globalOutput;
+  final int? globalQualityHeight;
+  final ValueChanged<int?> onQualityChanged;
+  final ValueChanged<OutputFormat> onFormatChanged;
   final ValueChanged<bool> onGroupFolderToggle;
   final VoidCallback onStartDownload;
   final VoidCallback onBack;
@@ -274,9 +501,9 @@ class _ConfigureCard extends StatelessWidget {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final total = queue.items.length;
-    final previewed =
-        queue.items.where((i) => i.metadata != null || i.previewError != null)
-            .length;
+    final previewed = queue.items
+        .where((i) => i.metadata != null || i.previewError != null)
+        .length;
 
     return Card(
       child: Padding(
@@ -315,23 +542,17 @@ class _ConfigureCard extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 12),
-            DropdownButtonFormField<String>(
-              isDense: true,
-              value: globalOutput.ext,
-              decoration: const InputDecoration(
-                labelText: 'Default format for all videos',
-                prefixIcon: Icon(Icons.movie_outlined),
-              ),
-              items: [
-                for (final f in [...kVideoFormats, ...kAudioFormats])
-                  DropdownMenuItem(value: f.ext, child: Text(f.label)),
-              ],
-              onChanged: (ext) {
-                if (ext == null) return;
-                final f = [...kVideoFormats, ...kAudioFormats]
-                    .firstWhere((x) => x.ext == ext);
-                onGlobalOutputChanged(f);
-              },
+            // ── Global quality ───────────────────────────────────────────
+            _GlobalQualityPicker(
+              selectedHeight: globalQualityHeight,
+              onChanged: onQualityChanged,
+            ),
+            const SizedBox(height: 12),
+            // ── Global format ────────────────────────────────────────────
+            _GlobalFormatPicker(
+              globalOutput: globalOutput,
+              isAudioOnly: globalQualityHeight == -1,
+              onChanged: onFormatChanged,
             ),
             const SizedBox(height: 12),
             ListenableBuilder(
@@ -395,7 +616,8 @@ class _ConfigureCard extends StatelessWidget {
   }
 }
 
-/// Card shown above the queue once download has started.
+// ── Running card ──────────────────────────────────────────────────────────────
+
 class _RunningCard extends StatelessWidget {
   const _RunningCard({required this.queue, required this.onReset});
   final DownloadQueueController queue;

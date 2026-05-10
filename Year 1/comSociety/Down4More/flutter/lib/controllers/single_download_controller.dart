@@ -63,7 +63,7 @@ class SingleDownloadController extends ChangeNotifier {
     _progress = const DownloadProgress(phase: DownloadPhase.fetchingMetadata);
     _metadata = null;
     _selectedFormat = null;
-    _selectedOutputFormat = kDefaultVideoFormat;
+    _selectedOutputFormat = _appSettings?.defaultOutputFormat ?? kDefaultVideoFormat;
     _trimStart = null;
     _trimEnd = null;
     _retryAttempt = 0;
@@ -72,11 +72,20 @@ class SingleDownloadController extends ChangeNotifier {
     try {
       final m = await _service.fetchMetadata(url.trim());
       _metadata = m;
-      _selectedFormat = m.formats.isNotEmpty ? m.defaultFormat : null;
-      // If the default format is audio-only, switch the output format default.
-      if (_selectedFormat?.isAudioOnly == true) {
-        _selectedOutputFormat = kDefaultAudioFormat;
+      // Apply the user's default quality setting to pick the initial VideoFormat.
+      _selectedFormat = _pickDefaultQuality(m);
+      // Snap output format to match the selected quality category.
+      if (_selectedFormat?.isAudioOnly == true &&
+          _selectedOutputFormat.category == OutputCategory.video) {
+        // Quality is audio-only: switch to default audio format.
+        _selectedOutputFormat = _appSettings != null
+            ? (kAudioFormats.firstWhere(
+                (f) => f.ext == _appSettings!.defaultAudioFormat,
+                orElse: () => kDefaultAudioFormat))
+            : kDefaultAudioFormat;
       }
+      // (If quality is video and format is already video, no snap needed —
+      // _selectedOutputFormat already set from defaultOutputFormat above.)
       _customFilename = m.title;
       _filenameManuallyEdited = false;
       _progress = const DownloadProgress(phase: DownloadPhase.ready);
@@ -94,6 +103,34 @@ class SingleDownloadController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Maps [AppSettings.defaultQuality] string to the best matching [VideoFormat]
+  /// from the fetched metadata. Falls back to the metadata's own defaultFormat
+  /// (i.e. "Best available") if nothing matches.
+  VideoFormat? _pickDefaultQuality(VideoMetadata m) {
+    if (m.formats.isEmpty) return null;
+    final q = _appSettings?.defaultQuality ?? 'best';
+    if (q == 'audio') {
+      return m.formats.firstWhere(
+        (f) => f.isAudioOnly,
+        orElse: () => m.defaultFormat,
+      );
+    }
+    if (q == 'best') return m.defaultFormat;
+    // Parse height from strings like '1080p', '720p', etc.
+    final height = int.tryParse(q.replaceAll('p', ''));
+    if (height != null) {
+      // Find the format whose selector matches this height ceiling.
+      return m.formats.firstWhere(
+        (f) => !f.isAudioOnly && f.height == height,
+        orElse: () => m.formats.firstWhere(
+          (f) => !f.isAudioOnly,
+          orElse: () => m.defaultFormat,
+        ),
+      );
+    }
+    return m.defaultFormat;
+  }
+
   void selectFormat(VideoFormat format) {
     if (_selectedFormat?.id == format.id) return;
     _selectedFormat = format;
@@ -102,17 +139,47 @@ class SingleDownloadController extends ChangeNotifier {
     // so the two dropdowns stay in sync automatically.
     if (format.isAudioOnly &&
         _selectedOutputFormat.category == OutputCategory.video) {
-      _selectedOutputFormat = kDefaultAudioFormat;
+      _selectedOutputFormat = _appSettings != null
+          ? (kAudioFormats.firstWhere(
+              (f) => f.ext == _appSettings!.defaultAudioFormat,
+              orElse: () => kDefaultAudioFormat))
+          : kDefaultAudioFormat;
     } else if (!format.isAudioOnly &&
         _selectedOutputFormat.category == OutputCategory.audio) {
-      _selectedOutputFormat = kDefaultVideoFormat;
+      _selectedOutputFormat = _appSettings != null
+          ? (kVideoFormats.firstWhere(
+              (f) => f.ext == _appSettings!.defaultFormat,
+              orElse: () => kDefaultVideoFormat))
+          : kDefaultVideoFormat;
     }
     notifyListeners();
   }
 
   void selectOutputFormat(OutputFormat fmt) {
     if (_selectedOutputFormat == fmt) return;
+    final wasAudio = _selectedOutputFormat.isAudio;
+    final isNowAudio = fmt.isAudio;
     _selectedOutputFormat = fmt;
+    // When switching categories, snap the quality selection to a sane default
+    // for the new category so the two dropdowns stay consistent.
+    if (wasAudio != isNowAudio && _metadata != null) {
+      final formats = _metadata!.formats;
+      if (isNowAudio) {
+        // Switch to the first audio-only quality
+        final audioFmt = formats.firstWhere(
+          (f) => f.isAudioOnly,
+          orElse: () => formats.last,
+        );
+        _selectedFormat = audioFmt;
+      } else {
+        // Switch to the first video quality
+        final videoFmt = formats.firstWhere(
+          (f) => !f.isAudioOnly,
+          orElse: () => formats.first,
+        );
+        _selectedFormat = videoFmt;
+      }
+    }
     notifyListeners();
   }
 
@@ -195,6 +262,7 @@ class SingleDownloadController extends ChangeNotifier {
       rateLimit: _appSettings?.hasSpeedLimit == true
           ? _appSettings!.speedLimit
           : null,
+      keepPartial: _appSettings?.keepPartial ?? false,
     );
     _progressSub = _handle!.stream.listen((event) {
       _progress = event;
