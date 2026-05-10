@@ -182,23 +182,24 @@ class _SubtitleInputState extends State<SubtitleInput> {
         widget.compact ? 10 : 14,
       ),
       child: Column(
+        mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           const Divider(height: 1),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           _LanguageRow(
             value: widget.value.language,
             customController: _customLangController,
             enabled: widget.enabled && on,
             onChanged: _setLanguage,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 10),
           _FormatPicker(
             value: widget.value.format,
             enabled: widget.enabled && on,
             onChanged: _setFormat,
           ),
-          const SizedBox(height: 12),
+          const SizedBox(height: 8),
           _EmbedToggle(
             value: widget.value.embed,
             enabled:
@@ -206,7 +207,7 @@ class _SubtitleInputState extends State<SubtitleInput> {
             outputFormat: widget.outputFormat,
             onChanged: _setEmbed,
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 4),
           _AutoTranslateToggle(
             value: widget.value.autoTranslate,
             enabled: widget.enabled && on,

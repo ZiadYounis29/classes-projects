@@ -245,6 +245,7 @@ class YtDlpService {
       '--newline',
       '--no-playlist',
       '--no-warnings',
+      '--no-cache-dir',
       '-f', format.id,
       if (isAudio) ...['-x', '--audio-format', ytdlpAudioFmt]
       else ...['--merge-output-format', outputExt],
@@ -402,7 +403,12 @@ class YtDlpService {
 
         final ffResult = await _runner('ffmpeg', ffmpegArgs);
 
-        // Delete the temp file regardless of ffmpeg outcome.
+        // Rename any subtitle sidecar files that yt-dlp wrote next to
+        // the temp video so they sit beside the final trimmed file with
+        // a matching base name.
+        _renameTempSubtitleFiles(tempPath, outputDir, finalName);
+
+        // Delete the temp video file regardless of ffmpeg outcome.
         _deleteTempFile(tempPath);
 
         if (state.cancelled) {
@@ -527,6 +533,32 @@ void _deleteTempFile(String? path) {
   try {
     final f = File(path);
     if (f.existsSync()) f.deleteSync();
+  } catch (_) {}
+}
+
+/// After trimming, yt-dlp's `--write-subs` may have written sidecar files
+/// like `_d4m_temp_xxx.en.srt` next to the temp video. Rename them to
+/// match the final trimmed filename (e.g. `Title [01m00s-02m00s].en.srt`).
+/// Swallows errors so a missing subtitle never blocks the download.
+void _renameTempSubtitleFiles(
+    String tempVideoPath, String outputDir, String finalBaseName) {
+  try {
+    final tempBase = p.basenameWithoutExtension(tempVideoPath);
+    final dir = Directory(outputDir);
+    if (!dir.existsSync()) return;
+    for (final entity in dir.listSync()) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      // Subtitle sidecars follow the pattern: <tempBase>.<lang>.<subExt>
+      // e.g. _d4m_temp_1234.en.srt, _d4m_temp_1234.ar.vtt
+      if (name.startsWith(tempBase) && name != p.basename(tempVideoPath)) {
+        final suffix = name.substring(tempBase.length); // e.g. ".en.srt"
+        final newPath = p.join(outputDir, '$finalBaseName$suffix');
+        try {
+          entity.renameSync(newPath);
+        } catch (_) {}
+      }
+    }
   } catch (_) {}
 }
 

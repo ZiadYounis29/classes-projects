@@ -347,15 +347,13 @@ class _SliceAndSubtitlesSection extends StatelessWidget {
                 ],
               );
             }
-            return IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: trim()),
-                  const SizedBox(width: 12),
-                  Expanded(child: subs()),
-                ],
-              ),
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: trim()),
+                const SizedBox(width: 12),
+                Expanded(child: subs()),
+              ],
             );
           },
         ),
