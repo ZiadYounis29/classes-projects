@@ -5,7 +5,9 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/download_queue_controller.dart';
 import '../models/download_progress.dart';
-import 'format_dropdown.dart' show formatBytes;
+import '../models/output_format.dart';
+import 'format_dropdown.dart';
+import 'quality_dropdown.dart';
 
 /// One row in the Playlist / Batch queue list.
 ///
@@ -60,14 +62,20 @@ class QueueItemRow extends StatelessWidget {
               ],
             ),
 
-            // Quality chip — shows the selected quality label + file size for
-            // this item. Quality is now chosen globally above the list.
+            // Below-row info: in QualityMode.global this is just the size
+            // chip (quality is shown by the global picker above the list);
+            // in QualityMode.perItem we expand into Quality + Format
+            // dropdowns next to the size chip so the user can override
+            // each row independently.
             if (item.metadata != null &&
                 item.previewError == null &&
                 progress.phase != DownloadPhase.downloading &&
                 progress.phase != DownloadPhase.trimming) ...[
               const SizedBox(height: 6),
-              _buildQualityChip(context),
+              if (queue.qualityMode == QualityMode.perItem)
+                _buildPerItemControls(context)
+              else
+                _buildQualityChip(context),
             ],
 
             // Inline preview-fetch error.
@@ -208,28 +216,55 @@ class QueueItemRow extends StatelessWidget {
   }
 
   Widget _buildQualityChip(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
     final m = item.metadata!;
     final selectedFormat = item.selectedFormat ?? m.formats.first;
 
     // Only show the size chip — the quality label ("Best available", "1080p",
     // etc.) is already conveyed by the global picker above the list.
     if (selectedFormat.fileSize == null) return const SizedBox.shrink();
+    return _SizeChip(bytes: selectedFormat.fileSize!);
+  }
 
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        color: scheme.surfaceContainerHighest,
-        borderRadius: BorderRadius.circular(4),
-      ),
-      child: Text(
-        formatBytes(selectedFormat.fileSize!),
-        style: TextStyle(
-          fontSize: 11,
-          color: scheme.onSurfaceVariant,
-          fontWeight: FontWeight.w500,
+  /// Per-item Quality + Format dropdowns shown below the title row when the
+  /// queue is in [QualityMode.perItem]. Each dropdown is wrapped in a
+  /// fixed-width [SizedBox] (260px) so the labels and the size estimate
+  /// fit without overflow at typical row widths — this is the same width
+  /// chosen for the F3 fix from the PR #5 review. The size chip stays
+  /// alongside so the user still sees the source bytes regardless of mode.
+  Widget _buildPerItemControls(BuildContext context) {
+    final m = item.metadata!;
+    final formats = m.formats;
+    if (formats.isEmpty) return _buildQualityChip(context);
+    final selectedFormat = item.selectedFormat ?? formats.first;
+    final selectedOutput = item.selectedOutputFormat ??
+        (selectedFormat.isAudioOnly ? kDefaultAudioFormat : kDefaultVideoFormat);
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 6,
+      crossAxisAlignment: WrapCrossAlignment.center,
+      children: [
+        SizedBox(
+          width: 260,
+          child: QualityDropdown(
+            formats: formats,
+            selected: selectedFormat,
+            onChanged: (f) => queue.setItemFormat(item, f),
+          ),
         ),
-      ),
+        SizedBox(
+          width: 260,
+          child: FormatDropdown(
+            selected: selectedOutput,
+            isAudioOnly: selectedFormat.isAudioOnly,
+            onChanged: (f) => queue.setItemOutputFormat(item, f),
+            sourceVideoBytes: selectedFormat.fileSize,
+            videoDuration: m.duration,
+          ),
+        ),
+        if (selectedFormat.fileSize != null)
+          _SizeChip(bytes: selectedFormat.fileSize!),
+      ],
     );
   }
 
@@ -339,6 +374,31 @@ class QueueItemRow extends StatelessWidget {
         const SnackBar(content: Text("Couldn't open the folder.")),
       );
     }
+  }
+}
+
+class _SizeChip extends StatelessWidget {
+  const _SizeChip({required this.bytes});
+  final int bytes;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+      decoration: BoxDecoration(
+        color: scheme.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        formatBytes(bytes),
+        style: TextStyle(
+          fontSize: 11,
+          color: scheme.onSurfaceVariant,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
   }
 }
 

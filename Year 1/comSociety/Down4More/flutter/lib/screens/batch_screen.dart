@@ -282,6 +282,14 @@ class _BatchScreenState extends State<BatchScreen> {
               setState(() => _globalOutput = f);
               q.setGlobalOutputFormat(f);
             },
+            onModeChanged: (mode) {
+              q.setQualityMode(mode);
+              // When switching back to global, re-apply the global format so
+              // every row aligns again — setQualityMode only resnaps quality.
+              if (mode == QualityMode.global) {
+                q.setGlobalOutputFormat(_globalOutput);
+              }
+            },
             onGroupFolderToggle: (v) {
               q.setGroupFolder(enabled: v, name: _folderCtrl.text);
             },
@@ -430,6 +438,53 @@ class _GlobalFormatPicker extends StatelessWidget {
   }
 }
 
+// ── Mode toggle (global vs per-item) ────────────────────────────────
+
+/// SegmentedButton that flips the Configure card between
+/// [QualityMode.global] (a single Quality + Format dropdown drives every
+/// row) and [QualityMode.perItem] (each row exposes its own dropdowns).
+class _ModeToggle extends StatelessWidget {
+  const _ModeToggle({required this.mode, required this.onChanged});
+  final QualityMode mode;
+  final ValueChanged<QualityMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Quality mode',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: scheme.onSurfaceVariant,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 6),
+        SegmentedButton<QualityMode>(
+          segments: const [
+            ButtonSegment(
+              value: QualityMode.global,
+              icon: Icon(Icons.layers_outlined, size: 18),
+              label: Text('All same'),
+            ),
+            ButtonSegment(
+              value: QualityMode.perItem,
+              icon: Icon(Icons.tune, size: 18),
+              label: Text('Per video'),
+            ),
+          ],
+          selected: {mode},
+          onSelectionChanged: (s) => onChanged(s.first),
+          showSelectedIcon: false,
+        ),
+      ],
+    );
+  }
+}
+
 class _FormatRow extends StatelessWidget {
   const _FormatRow({required this.format, required this.scheme});
   final OutputFormat format;
@@ -480,6 +535,7 @@ class _ConfigureCard extends StatelessWidget {
     required this.globalQualityHeight,
     required this.onQualityChanged,
     required this.onFormatChanged,
+    required this.onModeChanged,
     required this.onGroupFolderToggle,
     required this.onStartDownload,
     required this.onBack,
@@ -492,6 +548,7 @@ class _ConfigureCard extends StatelessWidget {
   final int? globalQualityHeight;
   final ValueChanged<int?> onQualityChanged;
   final ValueChanged<OutputFormat> onFormatChanged;
+  final ValueChanged<QualityMode> onModeChanged;
   final ValueChanged<bool> onGroupFolderToggle;
   final VoidCallback onStartDownload;
   final VoidCallback onBack;
@@ -542,19 +599,40 @@ class _ConfigureCard extends StatelessWidget {
               ),
             ],
             const SizedBox(height: 12),
-            // ── Global quality ───────────────────────────────────────────
-            _GlobalQualityPicker(
-              selectedHeight: globalQualityHeight,
-              onChanged: onQualityChanged,
+            // ── Mode toggle (global vs per-item) ─────────────────────────
+            ListenableBuilder(
+              listenable: queue,
+              builder: (_, __) => _ModeToggle(
+                mode: queue.qualityMode,
+                onChanged: onModeChanged,
+              ),
             ),
             const SizedBox(height: 12),
-            // ── Global format ────────────────────────────────────────────
-            _GlobalFormatPicker(
-              globalOutput: globalOutput,
-              isAudioOnly: globalQualityHeight == -1,
-              onChanged: onFormatChanged,
+            // ── Global pickers — only when mode == global ────────────────
+            ListenableBuilder(
+              listenable: queue,
+              builder: (_, __) {
+                if (queue.qualityMode != QualityMode.global) {
+                  return const SizedBox.shrink();
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _GlobalQualityPicker(
+                      selectedHeight: globalQualityHeight,
+                      onChanged: onQualityChanged,
+                    ),
+                    const SizedBox(height: 12),
+                    _GlobalFormatPicker(
+                      globalOutput: globalOutput,
+                      isAudioOnly: globalQualityHeight == -1,
+                      onChanged: onFormatChanged,
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                );
+              },
             ),
-            const SizedBox(height: 12),
             ListenableBuilder(
               listenable: queue,
               builder: (_, __) => Column(

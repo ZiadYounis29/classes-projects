@@ -8,10 +8,19 @@ import '../widgets/queue_item_row.dart';
 
 /// Playlist download screen.
 ///
-/// Two phases:
-///   1. URL input → Fetch
-///   2. Selection list with global format control + Download button on the
-///      same screen. Once started: per-item progress rows.
+/// Three-stage flow:
+///   1. **Selection** (`phase == PlaylistPhase.ready && _queueCtrl == null`):
+///      paste a URL, hit Fetch, tick the videos to download, then Continue.
+///      The card carries no quality / format / folder controls — those are
+///      moved to the next stage so this stage is purely about *which* videos.
+///   2. **Configure** (`_queueCtrl != null && !_started`): identical layout
+///      to [BatchScreen]'s configure card. Eagerly previews each selected
+///      entry so size chips show, exposes the global Quality + Format
+///      pickers, the All-same / Per-video [QualityMode] toggle, and the
+///      group-folder toggle. Per-item dropdowns appear inline on each row
+///      when the user flips to [QualityMode.perItem].
+///   3. **Running** (`_started == true`): per-item progress rows + global
+///      cancel-all / retry-failed / new-playlist controls.
 class PlaylistScreen extends StatefulWidget {
   const PlaylistScreen({super.key, required this.appSettings});
   final AppSettings appSettings;
@@ -26,17 +35,27 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   late final TextEditingController _folderCtrl;
   DownloadQueueController? _queueCtrl;
 
+  /// True while [DownloadQueueController.previewAll] is fetching metadata
+  /// for every selected entry — the user has clicked Continue but the
+  /// configure card hasn't finished filling in size chips yet.
+  bool _previewing = false;
+
+  /// True once [_onStartDownload] has been called and the queue is actively
+  /// downloading. Hides the configure card and shows the running card.
   bool _started = false;
 
-  /// Whether to save downloads into a named subfolder (default: true for playlists).
-  bool _groupFolderEnabled = true; // overridden in initState from appSettings
+  /// Whether to save downloads into a named subfolder (default: true for
+  /// playlists per [AppSettings.playlistFolder]).
+  bool _groupFolderEnabled = true;
 
-  /// Global output format applied to every queue item.
+  /// Global output format applied to every queue item when in
+  /// [QualityMode.global].
   OutputFormat _globalOutput = kDefaultVideoFormat;
 
-  /// Global quality preset applied to every queue item.
-  /// null = Best available, positive int = max height, -1 = audio only.
-  int? _globalQualityHeight; // null = best
+  /// Global quality preset applied to every queue item when in
+  /// [QualityMode.global]. null = Best available, positive int = max
+  /// height, -1 = audio-only.
+  int? _globalQualityHeight;
 
   @override
   void initState() {
@@ -56,9 +75,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
 
   void _applySettingsDefaults() {
     _globalOutput = _findFormat(widget.appSettings.defaultFormat);
-    _globalQualityHeight = _qualityHeightFromSettings(widget.appSettings.defaultQuality);
-    // If default quality is audio, make sure format is audio too.
-    if (_globalQualityHeight == -1 && _globalOutput.category == OutputCategory.video) {
+    _globalQualityHeight =
+        _qualityHeightFromSettings(widget.appSettings.defaultQuality);
+    if (_globalQualityHeight == -1 &&
+        _globalOutput.category == OutputCategory.video) {
       _globalOutput = _findFormat(widget.appSettings.defaultAudioFormat);
     }
     _groupFolderEnabled = widget.appSettings.playlistFolder;
@@ -73,8 +93,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
 
   int? _qualityHeightFromSettings(String q) {
     switch (q) {
-      case 'audio': return -1;
-      case 'best':  return null;
+      case 'audio':
+        return -1;
+      case 'best':
+        return null;
       default:
         final h = int.tryParse(q.replaceAll('p', ''));
         return h;
@@ -98,6 +120,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     _queueCtrl?.dispose();
     _queueCtrl = null;
     _started = false;
+    _previewing = false;
     _folderCtrl.clear();
     await _playlistCtrl.fetchPlaylist(url);
     // Pre-populate the folder name with the playlist title once fetched.
@@ -109,34 +132,57 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     if (mounted) setState(() {});
   }
 
-  void _onStartDownload() {
+  /// Stage 1 → Stage 2: build the queue from the user's selection and run
+  /// an eager preview pass so the configure card can show real size chips.
+  Future<void> _onContinue() async {
     final entries = _playlistCtrl.selectedEntries;
     if (entries.isEmpty) return;
 
     _queueCtrl?.dispose();
     final q = DownloadQueueController(appSettings: widget.appSettings);
     q.addEntries(entries);
-    q.setGlobalOutputFormat(_globalOutput);
+    q.setGroupFolder(enabled: _groupFolderEnabled, name: _folderCtrl.text);
+    q.addListener(_onQueueUpdate);
+    _queueCtrl = q;
+    _started = false;
+    _previewing = true;
+    setState(() {});
 
-    // Use whatever the user has set in the folder controls.
-    final folderName = _folderCtrl.text.trim().isNotEmpty
-        ? _folderCtrl.text.trim()
-        : (_playlistCtrl.playlistTitle?.trim().isNotEmpty == true
-            ? _playlistCtrl.playlistTitle!
-            : 'Playlist');
-    _folderCtrl.text = folderName;
-    q.setGroupFolder(enabled: _groupFolderEnabled, name: folderName);
+    // Eager preview: fetch full metadata for every selected entry so the
+    // size chips and per-item dropdowns can render meaningful values
+    // immediately, without waiting for the user to expand each row.
+    await q.previewAll(concurrency: 2);
+    if (!mounted) return;
 
-    // Apply the global quality preset after metadata is attached to items.
+    // Apply the global preset + format now that metadata is loaded so
+    // size chips reflect the user's quality choice immediately.
     q.setGlobalQualityPreset(
       targetHeight: _globalQualityHeight == -1 ? null : _globalQualityHeight,
       audioOnly: _globalQualityHeight == -1,
     );
+    q.setGlobalOutputFormat(_globalOutput);
 
-    q.addListener(_onQueueUpdate);
-    _queueCtrl = q;
-    _started = true;
+    setState(() => _previewing = false);
+  }
+
+  void _onBackToSelection() {
+    _queueCtrl?.dispose();
+    _queueCtrl = null;
+    _started = false;
+    _previewing = false;
     setState(() {});
+  }
+
+  void _onStartDownload() {
+    final q = _queueCtrl;
+    if (q == null) return;
+    q.setGroupFolder(enabled: _groupFolderEnabled, name: _folderCtrl.text);
+    q.setGlobalQualityPreset(
+      targetHeight: _globalQualityHeight == -1 ? null : _globalQualityHeight,
+      audioOnly: _globalQualityHeight == -1,
+    );
+    q.setGlobalOutputFormat(_globalOutput);
+    setState(() => _started = true);
     q.startAll();
   }
 
@@ -149,6 +195,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     _queueCtrl?.dispose();
     _queueCtrl = null;
     _started = false;
+    _previewing = false;
     _applySettingsDefaults();
     _urlCtrl.clear();
     _folderCtrl.clear();
@@ -162,6 +209,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
       builder: (context, _) {
         final phase = _playlistCtrl.phase;
         final isFetching = phase == PlaylistPhase.fetching;
+        final inSelection =
+            phase == PlaylistPhase.ready && _queueCtrl == null;
+        final inConfigure = _queueCtrl != null && !_started;
+        final inRunning = _started && _queueCtrl != null;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(20),
@@ -173,19 +224,34 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                 children: [
                   _buildHeader(context),
                   const SizedBox(height: 20),
-                  _buildUrlRow(context, isFetching),
+                  // The URL bar only belongs to stage 1. Hide it once a
+                  // queue exists so the configure / running card can own
+                  // the full width.
+                  if (_queueCtrl == null) _buildUrlRow(context, isFetching),
                   if (phase == PlaylistPhase.error) ...[
                     const SizedBox(height: 16),
                     _buildErrorBanner(context),
                   ],
-                  if (phase == PlaylistPhase.ready && !_started) ...[
+                  if (inSelection) ...[
                     const SizedBox(height: 16),
-                    _buildSelectionControls(context),
+                    _buildSelectionHeader(context),
                     const SizedBox(height: 8),
                     _buildEntryList(context),
+                    const SizedBox(height: 16),
+                    _buildContinueButton(context),
                   ],
-                  if (_started && _queueCtrl != null)
-                    _buildRunningSection(context),
+                  if (inConfigure) ...[
+                    const SizedBox(height: 16),
+                    _buildConfigureCard(context),
+                    const SizedBox(height: 8),
+                    for (int i = 0; i < _queueCtrl!.items.length; i++)
+                      QueueItemRow(
+                        item: _queueCtrl!.items[i],
+                        queue: _queueCtrl!,
+                        index: i,
+                      ),
+                  ],
+                  if (inRunning) _buildRunningSection(context),
                 ],
               ),
             ),
@@ -209,8 +275,8 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
         ),
         const SizedBox(height: 4),
         Text(
-          'Paste a playlist URL, pick which videos you want, set format, '
-          'then download them all at once.',
+          'Paste a playlist URL, pick which videos you want, then configure '
+          'quality and format on the next page.',
           style: theme.textTheme.bodyMedium?.copyWith(
             color: scheme.onSurfaceVariant,
           ),
@@ -276,8 +342,9 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     );
   }
 
-  /// Combined selection count + global quality + global format + download button.
-  Widget _buildSelectionControls(BuildContext context) {
+  // ── Stage 1: selection (URL + Fetch + checkbox list + Continue) ────────
+
+  Widget _buildSelectionHeader(BuildContext context) {
     final theme = Theme.of(context);
     final scheme = theme.colorScheme;
     final total = _playlistCtrl.entries.length;
@@ -286,95 +353,37 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+        child: Row(
           children: [
-            // ── Selection count + select/deselect all ──────────────────
-            Row(
-              children: [
-                Text(
-                  '$selected of $total selected',
-                  style: theme.textTheme.bodyMedium?.copyWith(
-                    fontWeight: FontWeight.w600,
-                    color: scheme.onSurface,
-                  ),
-                ),
-                const Spacer(),
-                TextButton(
-                  onPressed: selected == total
-                      ? _playlistCtrl.deselectAll
-                      : _playlistCtrl.selectAll,
-                  child: Text(
-                      selected == total ? 'Deselect all' : 'Select all'),
-                ),
-              ],
-            ),
-            const SizedBox(height: 12),
-            // ── Global quality ─────────────────────────────────────────
-            _GlobalQualityPicker(
-              selectedHeight: _globalQualityHeight,
-              onChanged: (h) {
-                setState(() {
-                  _globalQualityHeight = h;
-                  // Mirror selectFormat() in SingleDownloadController:
-                  // snap the output format when switching categories.
-                  if (h == -1 && _globalOutput.category == OutputCategory.video) {
-                    _globalOutput = _findFormat(widget.appSettings.defaultAudioFormat);
-                  } else if (h != -1 && _globalOutput.category == OutputCategory.audio) {
-                    _globalOutput = _findFormat(widget.appSettings.defaultFormat).isVideo
-                        ? _findFormat(widget.appSettings.defaultFormat)
-                        : kDefaultVideoFormat;
-                  }
-                });
-              },
-            ),
-            const SizedBox(height: 12),
-            // ── Global format ──────────────────────────────────────────
-            _GlobalFormatPicker(
-              globalOutput: _globalOutput,
-              isAudioOnly: _globalQualityHeight == -1,
-              onChanged: (f) => setState(() => _globalOutput = f),
-            ),
-            const SizedBox(height: 12),
-            // ── Folder settings ────────────────────────────────────────
-            SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              value: _groupFolderEnabled,
-              onChanged: (v) => setState(() => _groupFolderEnabled = v),
-              title: const Text('Save into a subfolder'),
-              subtitle: Text(
-                _groupFolderEnabled
-                    ? 'Files go into Down4More / <subfolder>'
-                    : 'Files go directly into Down4More',
-                style: theme.textTheme.bodySmall?.copyWith(
-                  color: scheme.onSurfaceVariant,
-                ),
+            Text(
+              '$selected of $total selected',
+              style: theme.textTheme.bodyMedium?.copyWith(
+                fontWeight: FontWeight.w600,
+                color: scheme.onSurface,
               ),
-              visualDensity: VisualDensity.compact,
             ),
-            if (_groupFolderEnabled) ...[
-              const SizedBox(height: 6),
-              TextField(
-                controller: _folderCtrl,
-                decoration: const InputDecoration(
-                  labelText: 'Folder name',
-                  isDense: true,
-                  prefixIcon: Icon(Icons.folder_outlined),
-                ),
-              ),
-            ],
-            const SizedBox(height: 16),
-            // ── Download button ────────────────────────────────────────
-            Align(
-              alignment: Alignment.centerRight,
-              child: FilledButton.icon(
-                onPressed: selected > 0 ? _onStartDownload : null,
-                icon: const Icon(Icons.download_rounded),
-                label: Text('Download ($selected)'),
-              ),
+            const Spacer(),
+            TextButton(
+              onPressed: selected == total
+                  ? _playlistCtrl.deselectAll
+                  : _playlistCtrl.selectAll,
+              child:
+                  Text(selected == total ? 'Deselect all' : 'Select all'),
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _buildContinueButton(BuildContext context) {
+    final selected = _playlistCtrl.selectedCount;
+    return Align(
+      alignment: Alignment.centerRight,
+      child: FilledButton.icon(
+        onPressed: selected > 0 ? _onContinue : null,
+        icon: const Icon(Icons.arrow_forward),
+        label: Text('Continue ($selected)'),
       ),
     );
   }
@@ -468,6 +477,173 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
       ],
     );
   }
+
+  // ── Stage 2: configure (mode toggle + global pickers + folder + start) ─
+
+  Widget _buildConfigureCard(BuildContext context) {
+    final q = _queueCtrl!;
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    final total = q.items.length;
+    final previewed = q.items
+        .where((i) => i.metadata != null || i.previewError != null)
+        .length;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  _previewing ? Icons.hourglass_top : Icons.tune,
+                  color: scheme.primary,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    _previewing
+                        ? 'Previewing ($previewed / $total)…'
+                        : 'Configure download ($total videos)',
+                    style: theme.textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (_previewing) ...[
+              const SizedBox(height: 8),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(6),
+                child: LinearProgressIndicator(
+                  value: total > 0 ? previewed / total : null,
+                  minHeight: 4,
+                  backgroundColor: scheme.surfaceContainerHighest,
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            // ── Mode toggle (global vs per-item) ─────────────────────────
+            ListenableBuilder(
+              listenable: q,
+              builder: (_, __) => _ModeToggle(
+                mode: q.qualityMode,
+                onChanged: (mode) {
+                  q.setQualityMode(mode);
+                  if (mode == QualityMode.global) {
+                    q.setGlobalOutputFormat(_globalOutput);
+                  }
+                },
+              ),
+            ),
+            const SizedBox(height: 12),
+            // ── Global pickers ─ only when mode == global ────────────────
+            ListenableBuilder(
+              listenable: q,
+              builder: (_, __) {
+                if (q.qualityMode != QualityMode.global) {
+                  return const SizedBox.shrink();
+                }
+                return Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
+                    _GlobalQualityPicker(
+                      selectedHeight: _globalQualityHeight,
+                      onChanged: (h) {
+                        setState(() {
+                          _globalQualityHeight = h;
+                          if (h == -1 &&
+                              _globalOutput.category ==
+                                  OutputCategory.video) {
+                            _globalOutput = _findFormat(
+                                widget.appSettings.defaultAudioFormat);
+                          } else if (h != -1 &&
+                              _globalOutput.category ==
+                                  OutputCategory.audio) {
+                            _globalOutput = _findFormat(
+                                widget.appSettings.defaultFormat);
+                          }
+                        });
+                        q.setGlobalQualityPreset(
+                          targetHeight: h == -1 ? null : h,
+                          audioOnly: h == -1,
+                        );
+                        q.setGlobalOutputFormat(_globalOutput);
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    _GlobalFormatPicker(
+                      globalOutput: _globalOutput,
+                      isAudioOnly: _globalQualityHeight == -1,
+                      onChanged: (f) {
+                        setState(() => _globalOutput = f);
+                        q.setGlobalOutputFormat(f);
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                );
+              },
+            ),
+            // ── Folder ──────────────────────────────────────────────────
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              value: _groupFolderEnabled,
+              onChanged: (v) {
+                setState(() => _groupFolderEnabled = v);
+                q.setGroupFolder(enabled: v, name: _folderCtrl.text);
+              },
+              title: const Text('Save into a subfolder'),
+              subtitle: Text(
+                _groupFolderEnabled
+                    ? 'Files go into Down4More / <subfolder>'
+                    : 'Files go directly into Down4More',
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: scheme.onSurfaceVariant,
+                ),
+              ),
+              visualDensity: VisualDensity.compact,
+            ),
+            if (_groupFolderEnabled) ...[
+              const SizedBox(height: 6),
+              TextField(
+                controller: _folderCtrl,
+                decoration: const InputDecoration(
+                  labelText: 'Folder name',
+                  isDense: true,
+                  prefixIcon: Icon(Icons.folder_outlined),
+                ),
+                onChanged: (v) =>
+                    q.setGroupFolder(enabled: true, name: v),
+              ),
+            ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                TextButton.icon(
+                  onPressed: _onBackToSelection,
+                  icon: const Icon(Icons.arrow_back),
+                  label: const Text('Back to selection'),
+                ),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed:
+                      _previewing || total == 0 ? null : _onStartDownload,
+                  icon: const Icon(Icons.download_rounded),
+                  label: Text('Download $total items'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Stage 3: running ────────────────────────────────────────────────────
 
   Widget _buildRunningSection(BuildContext context) {
     final q = _queueCtrl!;
@@ -578,6 +754,57 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   }
 }
 
+// ── Mode toggle (global vs per-item) ─────────────────────────────────────────
+
+/// SegmentedButton that flips the queue between [QualityMode.global] (a
+/// single Quality + Format dropdown drives every row) and
+/// [QualityMode.perItem] (each row exposes its own dropdowns).
+///
+/// Mirrors the toggle in [BatchScreen]; kept private to this file to avoid
+/// promoting an internal widget into a shared file before there's a third
+/// caller.
+class _ModeToggle extends StatelessWidget {
+  const _ModeToggle({required this.mode, required this.onChanged});
+  final QualityMode mode;
+  final ValueChanged<QualityMode> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Quality mode',
+          style: theme.textTheme.bodySmall?.copyWith(
+            color: scheme.onSurfaceVariant,
+            fontWeight: FontWeight.w500,
+          ),
+        ),
+        const SizedBox(height: 6),
+        SegmentedButton<QualityMode>(
+          segments: const [
+            ButtonSegment(
+              value: QualityMode.global,
+              icon: Icon(Icons.layers_outlined, size: 18),
+              label: Text('All same'),
+            ),
+            ButtonSegment(
+              value: QualityMode.perItem,
+              icon: Icon(Icons.tune, size: 18),
+              label: Text('Per video'),
+            ),
+          ],
+          selected: {mode},
+          onSelectionChanged: (s) => onChanged(s.first),
+          showSelectedIcon: false,
+        ),
+      ],
+    );
+  }
+}
+
 // ── Global quality picker ─────────────────────────────────────────────────────
 
 /// Quality presets expressed as max-height values.
@@ -609,7 +836,6 @@ class _GlobalQualityPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // Normalise: if selectedHeight isn't in the preset list, treat as null.
     final validHeights = _kQualityPresets.map((p) => p.height).toSet();
     final effectiveHeight =
         validHeights.contains(selectedHeight) ? selectedHeight : null;
@@ -659,7 +885,7 @@ class _QualityPresetRow extends StatelessWidget {
   }
 }
 
-// ── Global format picker (shared) ─────────────────────────────────────────────
+// ── Global format picker ─────────────────────────────────────────────────────
 
 class _GlobalFormatPicker extends StatelessWidget {
   const _GlobalFormatPicker({
@@ -675,8 +901,6 @@ class _GlobalFormatPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    // Mirror exactly what FormatDropdown does in the Single screen:
-    // show only the relevant category based on the current quality selection.
     final formats = isAudioOnly ? kAudioFormats : kVideoFormats;
     final effectiveSelected =
         formats.contains(globalOutput) ? globalOutput : formats.first;
@@ -705,6 +929,7 @@ class _GlobalFormatPicker extends StatelessWidget {
     );
   }
 }
+
 class _FormatRow extends StatelessWidget {
   const _FormatRow({required this.format, required this.scheme});
   final OutputFormat format;

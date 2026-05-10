@@ -299,8 +299,27 @@ class DownloadQueueController extends ChangeNotifier {
   /// Override which curated quality to download for one item. When the user
   /// picks "1080p" on a single playlist entry the screen calls this; the
   /// next call to [_startItem] picks it up.
+  ///
+  /// If the new quality crosses the video↔audio category line we also snap
+  /// [QueueItem.selectedOutputFormat] to a sane default for the new
+  /// category (mp4 ↔ m4a). This mirrors the snap behaviour in
+  /// [SingleDownloadController.selectFormat] so the per-item Format dropdown
+  /// never shows a stale combination (e.g. "Audio only · MP4").
   void setItemFormat(QueueItem item, VideoFormat? format) {
     item.selectedFormat = format;
+    if (format != null) {
+      final out = item.selectedOutputFormat;
+      if (out == null) {
+        item.selectedOutputFormat =
+            format.isAudioOnly ? kDefaultAudioFormat : kDefaultVideoFormat;
+      } else if (format.isAudioOnly &&
+          out.category == OutputCategory.video) {
+        item.selectedOutputFormat = kDefaultAudioFormat;
+      } else if (!format.isAudioOnly &&
+          out.category == OutputCategory.audio) {
+        item.selectedOutputFormat = kDefaultVideoFormat;
+      }
+    }
     notifyListeners();
   }
 
