@@ -454,8 +454,8 @@ class _AutoTranslateToggle extends StatelessWidget {
         ),
       ),
       subtitle: Text(
-        'Falls back to YouTube auto-captions when the uploader did not ship '
-        'manual subs in this language.',
+        'Auto-generated captions are always fetched as a fallback. '
+        'This also includes auto-translated versions.',
         style: theme.textTheme.bodySmall?.copyWith(
           color: scheme.onSurfaceVariant,
         ),
