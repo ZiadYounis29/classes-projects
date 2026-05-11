@@ -128,7 +128,37 @@ class _SubtitleInputState extends State<SubtitleInput> {
   }
 
   void _setAutoCaption(bool on) {
-    _emit(widget.value.copyWith(useAutoCaption: on));
+    final m = widget.metadata;
+    final lang = widget.value.language;
+    if (on && m != null) {
+      // Switching to auto-captions. If the current language has an auto
+      // track, keep it. Otherwise pick the first available auto language.
+      if (m.availableAutoCaptionLangs.contains(lang)) {
+        _emit(widget.value.copyWith(useAutoCaption: true));
+      } else if (m.availableAutoCaptionLangs.isNotEmpty) {
+        // Pick first common auto-caption language, or first overall.
+        final firstCommon = m.availableAutoCaptionLangs.firstWhere(
+          (c) => kSubtitleLanguages.any((l) => l.code == c),
+          orElse: () => m.availableAutoCaptionLangs.first,
+        );
+        _emit(widget.value.copyWith(useAutoCaption: true, language: firstCommon));
+      } else {
+        _emit(widget.value.copyWith(useAutoCaption: true));
+      }
+    } else if (!on && m != null) {
+      // Switching to manual subs. If the current language has a manual
+      // track, keep it. Otherwise pick the first available manual language.
+      if (m.availableSubtitleLangs.contains(lang)) {
+        _emit(widget.value.copyWith(useAutoCaption: false));
+      } else if (m.availableSubtitleLangs.isNotEmpty) {
+        _emit(widget.value.copyWith(
+            useAutoCaption: false, language: m.availableSubtitleLangs.first));
+      } else {
+        _emit(widget.value.copyWith(useAutoCaption: false));
+      }
+    } else {
+      _emit(widget.value.copyWith(useAutoCaption: on));
+    }
   }
 
   @override
@@ -324,10 +354,11 @@ class _LanguageRowState extends State<_LanguageRow> {
         for (final code in m.availableSubtitleLangs)
           _LangOption(code, _langLabel(code), isAuto: false),
       ];
-      // Add auto-caption tracks for common languages. Skip languages
-      // that already have a manual subtitle track to avoid duplicates.
+      // Add auto-caption tracks for common languages. Always include
+      // them even when a manual track exists for the same language so
+      // the auto-captions toggle can switch between manual and auto
+      // without the dropdown overriding the selection.
       for (final code in m.availableAutoCaptionLangs) {
-        if (m.availableSubtitleLangs.contains(code)) continue;
         // Only show languages from the common list to keep the dropdown
         // manageable — YouTube typically has 100+ auto-translated langs.
         if (kSubtitleLanguages.any((l) => l.code == code)) {
