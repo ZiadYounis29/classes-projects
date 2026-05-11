@@ -229,13 +229,18 @@ class YtDlpService {
       if (subtitles.useAutoCaption) {
         // Auto-caption track — use --write-auto-subs exclusively (never
         // combined with --write-subs, which caused failures previously).
+        // Auto-translated captions are generated on-the-fly by YouTube
+        // and are more prone to HTTP 429 rate-limiting, so we use a
+        // longer sleep and add retry with exponential backoff.
         subtitleArgs = <String>[
           '--write-auto-subs',
           '--sub-langs', lang,
           '--sub-format', '$fmt/best',
           '--convert-subs', fmt,
           if (subtitles.embed && canEmbed) '--embed-subs',
-          '--sleep-subtitles', '1',
+          '--sleep-subtitles', '3',
+          '--extractor-retries', '5',
+          '--retry-sleep', 'http:linear=2::4',
         ];
       } else {
         // Manual subtitle track selected.
