@@ -108,6 +108,16 @@ class SettingsScreen extends StatelessWidget {
               value: appSettings.playlistFolder,
               onChanged: appSettings.setPlaylistFolder,
             ),
+            const SizedBox(height: 8),
+            _SwitchTile(
+              icon: Icons.label_outline,
+              title: 'Append quality to filename',
+              subtitle:
+                  'Adds the quality label to the filename (e.g. "Title [1080p]"). '
+                  'In Single mode, updates the name field live as you change quality.',
+              value: appSettings.appendQualityToFilename,
+              onChanged: appSettings.setAppendQualityToFilename,
+            ),
             const SizedBox(height: 32),
 
             // ── Subtitles ───────────────────────────────────────────────────

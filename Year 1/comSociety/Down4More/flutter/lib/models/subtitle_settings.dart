@@ -94,7 +94,7 @@ class SubtitleSettings {
     this.language = 'en',
     this.format = 'srt',
     this.embed = false,
-    this.autoTranslate = false,
+    this.useAutoCaption = false,
   });
 
   /// Master switch. When false the queue / single screen pretends this
@@ -116,11 +116,13 @@ class SubtitleSettings {
   /// separate sidecar file next to the video.
   final bool embed;
 
-  /// When true, yt-dlp also writes auto-generated subtitles via
-  /// `--write-auto-subs`. This is what enables YouTube's machine-generated
-  /// transcripts AND auto-translated subtitles for languages the uploader
-  /// didn't ship manually.
-  final bool autoTranslate;
+  /// When true, the selected [language] is an auto-caption track (from
+  /// yt-dlp's `automatic_captions` field) rather than a manually-uploaded
+  /// subtitle. The download service uses `--write-auto-subs` exclusively
+  /// (no `--write-subs`) and passes the lang code via `--sub-langs`.
+  /// Auto-captions are always English — this flag is set automatically when
+  /// the video has no manual English subtitle track.
+  final bool useAutoCaption;
 
   static const SubtitleSettings disabled = SubtitleSettings();
 
@@ -129,14 +131,14 @@ class SubtitleSettings {
     String? language,
     String? format,
     bool? embed,
-    bool? autoTranslate,
+    bool? useAutoCaption,
   }) {
     return SubtitleSettings(
       enabled: enabled ?? this.enabled,
       language: language ?? this.language,
       format: format ?? this.format,
       embed: embed ?? this.embed,
-      autoTranslate: autoTranslate ?? this.autoTranslate,
+      useAutoCaption: useAutoCaption ?? this.useAutoCaption,
     );
   }
 
@@ -157,14 +159,15 @@ class SubtitleSettings {
       other.language == language &&
       other.format == format &&
       other.embed == embed &&
-      other.autoTranslate == autoTranslate;
+      other.useAutoCaption == useAutoCaption;
 
   @override
   int get hashCode =>
-      Object.hash(enabled, language, format, embed, autoTranslate);
+      Object.hash(enabled, language, format, embed, useAutoCaption);
 
   @override
   String toString() =>
       'SubtitleSettings(enabled: $enabled, language: $language, '
-      'format: $format, embed: $embed, autoTranslate: $autoTranslate)';
+      'format: $format, embed: $embed, '
+      'useAutoCaption: $useAutoCaption)';
 }

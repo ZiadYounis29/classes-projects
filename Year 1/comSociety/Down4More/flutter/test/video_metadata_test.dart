@@ -52,7 +52,7 @@ void main() {
 
       // Audio-only rung should be just the 10k audio
       final audio =
-          m.formats.firstWhere((f) => f.label == 'Audio only (best)');
+          m.formats.firstWhere((f) => f.label == 'Audio only');
       expect(audio.fileSize, 10_000);
     });
 

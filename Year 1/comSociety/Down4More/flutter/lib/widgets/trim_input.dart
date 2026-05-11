@@ -12,10 +12,15 @@ import 'package:flutter/services.dart';
 ///
 /// Calls [onChanged] whenever either field changes to a valid (or cleared)
 /// value. [onChanged] receives (start, end) where either may be null.
+///
+/// [onValidityChanged] is called whenever the trim error state changes — true
+/// means there is at least one validation error currently shown (e.g. end
+/// before start, exceeds duration). Use this to disable the download button.
 class TrimInput extends StatefulWidget {
   const TrimInput({
     super.key,
     required this.onChanged,
+    this.onValidityChanged,
     this.enabled = true,
     this.videoDuration,
   });
@@ -23,6 +28,10 @@ class TrimInput extends StatefulWidget {
   /// Called whenever the parsed trim window changes. Both args are null when
   /// the fields are empty / invalid.
   final void Function(Duration? start, Duration? end) onChanged;
+
+  /// Called whenever the error state changes. [hasError] is true when one or
+  /// more fields are in an error state. Null when the caller doesn't care.
+  final void Function(bool hasError)? onValidityChanged;
 
   final bool enabled;
 
@@ -73,18 +82,24 @@ class _TrimInputState extends State<TrimInput> {
       endErr = 'Exceeds video length';
     }
 
+    final hadError = (_startError != null || _endError != null);
+    final hasError = (startErr != null || endErr != null);
+
     setState(() {
       _startError = startErr;
       _endError = endErr;
     });
 
+    // Notify caller when validity flips so the download button can be gated.
+    if (hasError != hadError) {
+      widget.onValidityChanged?.call(hasError);
+    }
+
     // Only fire the callback when both set values are valid (or cleared).
     final validStart = startErr == null ? start : null;
     final validEnd = endErr == null ? end : null;
 
-    final hasStartErr = startErr != null;
-    final hasEndErr = endErr != null;
-    if (!hasStartErr && !hasEndErr) {
+    if (!hasError) {
       widget.onChanged(validStart, validEnd);
     }
   }

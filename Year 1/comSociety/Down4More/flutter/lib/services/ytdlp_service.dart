@@ -178,7 +178,7 @@ class YtDlpService {
     required VideoFormat format,
     required String outputDir,
     String outputExt = 'mp4',
-    String outputTemplate = '%(title).200B [%(id)s].%(ext)s',
+    String outputTemplate = '%(title).200B.%(ext)s',
     String? customFilename,
     Duration? trimStart,
     Duration? trimEnd,
@@ -225,21 +225,30 @@ class YtDlpService {
           ? 'srt'
           : subtitles.format.trim();
       final canEmbed = !isAudio && kEmbedSubsSupportedExts.contains(outputExt);
-      subtitleArgs = <String>[
-        '--write-subs',
-        // Always include auto-subs as a fallback so videos without manual
-        // subtitles still get auto-generated captions. Without this flag
-        // playlist downloads are inconsistent — only videos with manually
-        // uploaded subs would produce a transcript file.
-        '--write-auto-subs',
-        '--sub-langs', lang,
-        '--sub-format', '$fmt/best',
-        '--convert-subs', fmt,
-        if (subtitles.embed && canEmbed) '--embed-subs',
-        // Space out subtitle requests slightly to avoid rate-limiting when
-        // downloading subtitles for many playlist items concurrently.
-        '--sleep-subtitles', '1',
-      ];
+
+      if (subtitles.useAutoCaption) {
+        // Auto-caption track (English only) — use --write-auto-subs exclusively.
+        // This is the fallback path for videos that have no manually-uploaded
+        // English subtitle track but do have an auto-generated one.
+        subtitleArgs = <String>[
+          '--write-auto-subs',
+          '--sub-langs', lang,
+          '--sub-format', '$fmt/best',
+          '--convert-subs', fmt,
+          if (subtitles.embed && canEmbed) '--embed-subs',
+          '--sleep-subtitles', '1',
+        ];
+      } else {
+        // Manual subtitle track selected.
+        subtitleArgs = <String>[
+          '--write-subs',
+          '--sub-langs', lang,
+          '--sub-format', '$fmt/best',
+          '--convert-subs', fmt,
+          if (subtitles.embed && canEmbed) '--embed-subs',
+          '--sleep-subtitles', '1',
+        ];
+      }
     } else {
       subtitleArgs = const <String>[];
     }

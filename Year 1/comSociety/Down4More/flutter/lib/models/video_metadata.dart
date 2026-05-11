@@ -58,6 +58,8 @@ class VideoMetadata {
     required this.duration,
     required this.thumbnailUrl,
     required this.formats,
+    this.availableSubtitleLangs = const [],
+    this.availableAutoCaptionLangs = const [],
   });
 
   /// The URL the user originally pasted (kept verbatim — yt-dlp may rewrite
@@ -78,6 +80,14 @@ class VideoMetadata {
   /// Curated list of qualities the user can pick from. Always contains at
   /// least one entry: a `'best'` selector that lets yt-dlp pick.
   final List<VideoFormat> formats;
+
+  /// Language codes for manually uploaded subtitles (from yt-dlp's
+  /// `subtitles` field), e.g. `['en', 'ar', 'es']`. Empty when none available.
+  final List<String> availableSubtitleLangs;
+
+  /// Language codes for auto-generated / auto-translated captions (from
+  /// yt-dlp's `automatic_captions` field). Empty when none available.
+  final List<String> availableAutoCaptionLangs;
 
   /// Build from the JSON object returned by `yt-dlp --dump-single-json`.
   ///
@@ -102,6 +112,26 @@ class VideoMetadata {
         (json['formats'] as List<dynamic>? ?? <dynamic>[]).cast<Map<String, dynamic>>();
     final formats = _buildQualityList(rawFormats);
 
+    // Parse manually-uploaded subtitle language codes.
+    final subtitlesMap = json['subtitles'] as Map<String, dynamic>?;
+    final availableSubtitleLangs = subtitlesMap != null
+        ? (subtitlesMap.keys.toList()..sort())
+        : <String>[];
+
+    // Parse auto-generated caption language codes. We only surface English
+    // auto-captions ('en' and 'en-*' variants such as 'en-orig') — these
+    // are used as a fallback when the video has no manually-uploaded English
+    // subtitle track. Non-English auto-translated variants are excluded.
+    final autoCaptionsMap = json['automatic_captions'] as Map<String, dynamic>?;
+    final availableAutoCaptionLangs = autoCaptionsMap != null
+        ? (autoCaptionsMap.keys.where((k) {
+            if (k == 'live_chat') return false;
+            if (k == 'en') return true;
+            return k.startsWith('en-');
+          }).toList()
+            ..sort())
+        : <String>[];
+
     return VideoMetadata(
       url: originalUrl,
       title: title,
@@ -109,6 +139,8 @@ class VideoMetadata {
       duration: duration,
       thumbnailUrl: thumbnailUrl,
       formats: formats,
+      availableSubtitleLangs: availableSubtitleLangs,
+      availableAutoCaptionLangs: availableAutoCaptionLangs,
     );
   }
 
@@ -244,7 +276,7 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
   out.add(
     VideoFormat(
       id: 'ba/b',
-      label: 'Audio only (best)',
+      label: 'Audio only',
       ext: 'm4a',
       height: null,
       fileSize: bestAudioSize,

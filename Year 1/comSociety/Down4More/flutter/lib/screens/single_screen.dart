@@ -30,6 +30,7 @@ class _SingleScreenState extends State<SingleScreen> {
   late final TextEditingController _urlController;
   late final TextEditingController _filenameController;
   bool _ownsController = false;
+  bool _trimHasError = false;
 
   @override
   void initState() {
@@ -82,6 +83,7 @@ class _SingleScreenState extends State<SingleScreen> {
     final url = _urlController.text.trim();
     if (url.isEmpty) return;
     FocusScope.of(context).unfocus();
+    setState(() => _trimHasError = false);
     await _controller.fetchMetadata(url);
   }
 
@@ -105,6 +107,7 @@ class _SingleScreenState extends State<SingleScreen> {
   void _onReset() {
     _controller.reset();
     _urlController.clear();
+    setState(() => _trimHasError = false);
   }
 
   Future<void> _openFile(String path) async {
@@ -184,8 +187,11 @@ class _SingleScreenState extends State<SingleScreen> {
                       videoDuration: metadata.duration,
                       onTrimChanged: (start, end) =>
                           _controller.setTrim(start: start, end: end),
+                      onTrimValidityChanged: (hasError) =>
+                          setState(() => _trimHasError = hasError),
                       subtitles: _initialSubtitles(),
                       outputFormat: selectedOutput,
+                      metadata: metadata,
                       onSubtitlesChanged: _controller.setSubtitleSettings,
                     ),
                     const SizedBox(height: 12),
@@ -207,7 +213,9 @@ class _SingleScreenState extends State<SingleScreen> {
                       Align(
                         alignment: Alignment.centerLeft,
                         child: FilledButton.icon(
-                          onPressed: selected == null ? null : _onDownload,
+                          onPressed: (selected == null || _trimHasError)
+                              ? null
+                              : _onDownload,
                           icon: const Icon(Icons.download_rounded),
                           label: const Text('Download'),
                         ),
@@ -283,18 +291,22 @@ class _SliceAndSubtitlesSection extends StatelessWidget {
     required this.isDownloading,
     required this.videoDuration,
     required this.onTrimChanged,
+    this.onTrimValidityChanged,
     required this.subtitles,
     required this.outputFormat,
     required this.onSubtitlesChanged,
+    this.metadata,
   });
 
   final bool isDownloading;
   final Duration? videoDuration;
   final void Function(Duration?, Duration?) onTrimChanged;
+  final void Function(bool hasError)? onTrimValidityChanged;
   final SubtitleSettings subtitles;
   final dynamic outputFormat; // OutputFormat — kept dynamic to avoid an extra
   // import alias here; the SubtitleInput widget itself is strongly typed.
   final ValueChanged<SubtitleSettings> onSubtitlesChanged;
+  final dynamic metadata; // VideoMetadata?
 
   static const double _stackThreshold = 620;
 
@@ -307,12 +319,14 @@ class _SliceAndSubtitlesSection extends StatelessWidget {
           enabled: !isDownloading,
           videoDuration: videoDuration,
           onChanged: onTrimChanged,
+          onValidityChanged: onTrimValidityChanged,
         );
 
     Widget subs() => SubtitleInput(
           enabled: !isDownloading,
           value: subtitles,
           outputFormat: outputFormat,
+          metadata: metadata,
           onChanged: onSubtitlesChanged,
         );
 

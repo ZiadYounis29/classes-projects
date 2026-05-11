@@ -3,9 +3,47 @@ import 'package:flutter/material.dart';
 import '../controllers/download_queue_controller.dart';
 import '../models/output_format.dart';
 import '../models/subtitle_settings.dart';
+import '../models/video_metadata.dart';
 import '../settings/app_settings.dart';
 import '../widgets/queue_item_row.dart';
 import '../widgets/subtitle_input.dart';
+
+/// Builds a synthetic [VideoMetadata] that merges the subtitle availability
+/// of all fetched queue items. Used to populate the global [SubtitleInput]
+/// with real track information (union of manual subtitle langs, English
+/// auto-captions if any item has them and none has a manual English track).
+VideoMetadata? _mergedSubtitleMetadata(List<QueueItem> items) {
+  final fetched = items.where((i) => i.metadata != null).toList();
+  if (fetched.isEmpty) return null;
+
+  // Union of all manual subtitle language codes across items.
+  final subtitleLangs = <String>{};
+  bool anyHasEnglishAuto = false;
+
+  for (final item in fetched) {
+    final m = item.metadata!;
+    subtitleLangs.addAll(m.availableSubtitleLangs);
+    if (m.availableAutoCaptionLangs.isNotEmpty) anyHasEnglishAuto = true;
+  }
+
+  // Only expose English auto-captions when no item already has a manual
+  // English subtitle track (mirrors the single-download behaviour).
+  final hasManualEn = subtitleLangs.any((c) => c == 'en' || c.startsWith('en-'));
+  final autoCaptionLangs = (anyHasEnglishAuto && !hasManualEn) ? ['en'] : <String>[];
+
+  // Return a minimal VideoMetadata shell — the SubtitleInput widget only
+  // reads availableSubtitleLangs and availableAutoCaptionLangs from it.
+  return VideoMetadata(
+    url: '',
+    title: '',
+    uploader: '',
+    duration: null,
+    thumbnailUrl: null,
+    formats: const [],
+    availableSubtitleLangs: (subtitleLangs.toList()..sort()),
+    availableAutoCaptionLangs: autoCaptionLangs,
+  );
+}
 
 /// Batch download screen.
 ///
@@ -28,6 +66,7 @@ class _BatchScreenState extends State<BatchScreen> {
   DownloadQueueController? _queueCtrl;
   bool _previewing = false;
   bool _started = false;
+  VideoMetadata? _mergedMeta;
 
   OutputFormat _globalOutput = kDefaultVideoFormat;
 
@@ -146,7 +185,10 @@ class _BatchScreenState extends State<BatchScreen> {
     );
     q.setGlobalOutputFormat(_globalOutput);
 
-    setState(() => _previewing = false);
+    setState(() {
+      _previewing = false;
+      _mergedMeta = _mergedSubtitleMetadata(q.items);
+    });
   }
 
   void _onStartDownload() {
@@ -173,6 +215,7 @@ class _BatchScreenState extends State<BatchScreen> {
     _queueCtrl = null;
     _started = false;
     _previewing = false;
+    _mergedMeta = null;
     _urlsCtrl.clear();
     _folderCtrl.clear();
     setState(() {});
@@ -183,6 +226,7 @@ class _BatchScreenState extends State<BatchScreen> {
     _queueCtrl = null;
     _started = false;
     _previewing = false;
+    _mergedMeta = null;
     setState(() {});
   }
 
@@ -269,6 +313,7 @@ class _BatchScreenState extends State<BatchScreen> {
           _ConfigureCard(
             queue: q,
             previewing: _previewing,
+            mergedMeta: _mergedMeta,
             folderCtrl: _folderCtrl,
             globalOutput: _globalOutput,
             globalQualityHeight: _globalQualityHeight,
@@ -386,16 +431,19 @@ class _QualityPresetRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final IconData icon;
+    if (preset.height == null) {
+      icon = Icons.star_outlined;
+    } else if (preset.height == -1) {
+      icon = Icons.audiotrack_outlined;
+    } else {
+      icon = Icons.videocam_outlined;
+    }
+
     return Row(
       children: [
-        if (preset.height != null) ...[
-          Icon(
-            preset.height == -1 ? Icons.audiotrack_outlined : Icons.videocam_outlined,
-            size: 16,
-            color: scheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 10),
-        ],
+        Icon(icon, size: 16, color: scheme.onSurfaceVariant),
+        const SizedBox(width: 10),
         Text(preset.label),
       ],
     );
@@ -541,6 +589,7 @@ class _ConfigureCard extends StatelessWidget {
   const _ConfigureCard({
     required this.queue,
     required this.previewing,
+    required this.mergedMeta,
     required this.folderCtrl,
     required this.globalOutput,
     required this.globalQualityHeight,
@@ -555,6 +604,7 @@ class _ConfigureCard extends StatelessWidget {
 
   final DownloadQueueController queue;
   final bool previewing;
+  final VideoMetadata? mergedMeta;
   final TextEditingController folderCtrl;
   final OutputFormat globalOutput;
   final int? globalQualityHeight;
@@ -645,6 +695,7 @@ class _ConfigureCard extends StatelessWidget {
                     SubtitleInput(
                       value: queue.globalSubtitles,
                       outputFormat: globalOutput,
+                      metadata: mergedMeta,
                       onChanged: onSubtitlesChanged,
                     ),
                     const SizedBox(height: 12),
