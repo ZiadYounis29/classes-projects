@@ -341,37 +341,44 @@ class _LanguageRowState extends State<_LanguageRow> {
 
   /// Build the list of dropdown options.
   ///
-  /// When metadata is available we show the video's real manually-uploaded
-  /// subtitle tracks, plus an English auto-caption entry if one exists and
-  /// no manual English track is already present.
+  /// When metadata is available the list is filtered by the current toggle
+  /// state: auto-captions ON → only auto-caption tracks, OFF → only manual
+  /// subtitle tracks. This prevents the confusing mix of both types and
+  /// ensures the toggle visibly controls what appears in the dropdown.
   /// If metadata is absent we fall back to the static language list.
   List<_LangOption> _buildOptions() {
     final m = widget.metadata;
     if (m != null &&
         (m.availableSubtitleLangs.isNotEmpty ||
             m.availableAutoCaptionLangs.isNotEmpty)) {
-      final opts = <_LangOption>[
-        for (final code in m.availableSubtitleLangs)
-          _LangOption(code, _langLabel(code), isAuto: false),
-      ];
-      // Add auto-caption tracks for common languages. Always include
-      // them even when a manual track exists for the same language so
-      // the auto-captions toggle can switch between manual and auto
-      // without the dropdown overriding the selection.
-      for (final code in m.availableAutoCaptionLangs) {
-        // Only show languages from the common list to keep the dropdown
-        // manageable — YouTube typically has 100+ auto-translated langs.
-        if (kSubtitleLanguages.any((l) => l.code == code)) {
-          opts.add(
-              _LangOption(code, '${_langLabel(code)} (auto)', isAuto: true));
+      if (widget.isAutoCaption) {
+        // Auto-caption mode: show only auto-caption tracks.
+        final opts = <_LangOption>[];
+        for (final code in m.availableAutoCaptionLangs) {
+          // Only show languages from the common list to keep the dropdown
+          // manageable — YouTube typically has 100+ auto-translated langs.
+          if (kSubtitleLanguages.any((l) => l.code == code)) {
+            opts.add(
+                _LangOption(code, '${_langLabel(code)} (auto)', isAuto: true));
+          }
         }
+        if (opts.isNotEmpty) return opts;
+        // No common auto-caption tracks — fall through to static list.
+      } else {
+        // Manual mode: show only manual subtitle tracks.
+        if (m.availableSubtitleLangs.isNotEmpty) {
+          return [
+            for (final code in m.availableSubtitleLangs)
+              _LangOption(code, _langLabel(code), isAuto: false),
+          ];
+        }
+        // No manual tracks — fall through to static list.
       }
-      return opts;
     }
-    // Fallback: static list (all treated as manual).
+    // Fallback: static list, tagged to match the current toggle state.
     return [
       for (final l in kSubtitleLanguages)
-        _LangOption(l.code, l.label, isAuto: false),
+        _LangOption(l.code, l.label, isAuto: widget.isAutoCaption),
     ];
   }
 
@@ -402,69 +409,39 @@ class _LanguageRowState extends State<_LanguageRow> {
         (widget.metadata!.availableSubtitleLangs.isNotEmpty ||
             widget.metadata!.availableAutoCaptionLangs.isNotEmpty);
 
-    // Build dropdown items. When real tracks are available, manual subtitle
-    // tracks appear first (under a section header if there are any), followed
-    // by the single English auto-caption entry (if present and no manual
-    // English track exists). The static fallback list has no section headers.
+    // Build dropdown items. Since the options are already filtered by
+    // toggle state (manual-only or auto-only), no section headers are
+    // needed — all entries belong to the same type.
     final items = <DropdownMenuItem<String>>[];
-    if (hasRealTracks) {
-      if (options.any((o) => !o.isAuto)) {
-        items.add(_sectionHeader(context, 'Subtitles'));
-        for (final opt in options.where((o) => !o.isAuto)) {
-          items.add(DropdownMenuItem(
-            value: opt.dropdownKey,
-            child: Text(opt.label),
-          ));
-        }
-      }
-      final autoOpts = options.where((o) => o.isAuto).toList();
-      if (autoOpts.isNotEmpty) {
-        items.add(_sectionHeader(context, 'Auto-captions'));
-        for (final opt in autoOpts) {
-          items.add(DropdownMenuItem(
-            value: opt.dropdownKey,
-            child: Text(opt.label),
-          ));
-        }
-      }
-      items.add(const DropdownMenuItem(
-        value: _otherKey,
-        child: Text('Other…'),
-      ));
-    } else {
-      // Static list fallback.
-      for (final opt in options) {
-        items.add(DropdownMenuItem(
-          value: opt.dropdownKey,
-          child: Text(opt.label),
-        ));
-      }
-      items.add(const DropdownMenuItem(
-        value: _otherKey,
-        child: Text('Other…'),
+    for (final opt in options) {
+      items.add(DropdownMenuItem(
+        value: opt.dropdownKey,
+        child: Text(opt.label),
       ));
     }
+    items.add(const DropdownMenuItem(
+      value: _otherKey,
+      child: Text('Other…'),
+    ));
 
     // Ensure current value exists in items list.
     final validKeys = items
-        .where((i) => i.value != null && i.child is! _SectionHeaderChild)
+        .where((i) => i.value != null)
         .map((i) => i.value!)
         .toSet();
 
-    // Pick the best fallback key: prefer the current value, then first manual
-    // sub, then first auto-caption, then Other.
+    // Pick the best fallback key based on toggle state.
     String bestFallback() {
-      // Try first manual sub track.
-      final firstManual = validKeys.firstWhere(
-          (k) => k.startsWith('sub:') && k != '__other__',
+      final prefix = widget.isAutoCaption ? 'auto:' : 'sub:';
+      final first = validKeys.firstWhere(
+          (k) => k.startsWith(prefix) && k != '__other__',
           orElse: () => '');
-      if (firstManual.isNotEmpty) return firstManual;
-      // Try first auto-caption track.
-      final firstAuto = validKeys.firstWhere(
-          (k) => k.startsWith('auto:'),
-          orElse: () => '');
-      if (firstAuto.isNotEmpty) return firstAuto;
-      return _otherKey;
+      if (first.isNotEmpty) return first;
+      // If nothing matches the current mode, try any real track.
+      final any = validKeys.firstWhere(
+          (k) => k != '__other__',
+          orElse: () => _otherKey);
+      return any;
     }
 
     final effectiveKey = validKeys.contains(currentKey)
@@ -570,37 +547,6 @@ class _LanguageRowState extends State<_LanguageRow> {
     return parts.join(', ');
   }
 
-  /// Non-interactive section header item rendered as a disabled label.
-  static DropdownMenuItem<String> _sectionHeader(
-      BuildContext context, String label) {
-    final theme = Theme.of(context);
-    return DropdownMenuItem<String>(
-      enabled: false,
-      // Use a unique value that won't clash with any real key.
-      value: '__section__$label',
-      child: _SectionHeaderChild(label: label, theme: theme),
-    );
-  }
-}
-
-/// The widget used as a section-header child inside the dropdown. Also used as
-/// a type-tag so [_LanguageRow] can filter it out of the "valid keys" set.
-class _SectionHeaderChild extends StatelessWidget {
-  const _SectionHeaderChild({required this.label, required this.theme});
-  final String label;
-  final ThemeData theme;
-
-  @override
-  Widget build(BuildContext context) {
-    return Text(
-      label.toUpperCase(),
-      style: theme.textTheme.labelSmall?.copyWith(
-        color: theme.colorScheme.primary,
-        fontWeight: FontWeight.w700,
-        letterSpacing: 0.8,
-      ),
-    );
-  }
 }
 
 // ── Format picker ─────────────────────────────────────────────────────────────
