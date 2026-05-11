@@ -316,6 +316,7 @@ class QueueItemRow extends StatelessWidget {
     return SubtitleInput(
       value: effective,
       outputFormat: selectedOutput,
+      metadata: item.metadata,
       compact: true,
       onChanged: (s) => queue.setItemSubtitleSettings(item, s),
     );
