@@ -58,11 +58,19 @@ class _QualityRow extends StatelessWidget {
   const _QualityRow({required this.format});
   final VideoFormat format;
 
+  IconData get _icon {
+    if (format.isAudioOnly) return Icons.audiotrack_outlined;
+    if (format.height == null) return Icons.star_outlined; // "Best available"
+    return Icons.videocam_outlined;
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     return Row(
       children: [
+        Icon(_icon, size: 16, color: scheme.onSurfaceVariant),
+        const SizedBox(width: 10),
         Expanded(
           child: Text(
             format.label,

@@ -4,9 +4,42 @@ import '../controllers/download_queue_controller.dart';
 import '../controllers/playlist_controller.dart';
 import '../models/output_format.dart';
 import '../models/subtitle_settings.dart';
+import '../models/video_metadata.dart';
 import '../settings/app_settings.dart';
 import '../widgets/queue_item_row.dart';
 import '../widgets/subtitle_input.dart';
+
+/// Builds a synthetic [VideoMetadata] that merges the subtitle availability
+/// of all fetched queue items. Used to populate the global [SubtitleInput]
+/// with real track information (union of manual subtitle langs, English
+/// auto-captions if any item has them and none has a manual English track).
+VideoMetadata? _mergedSubtitleMetadata(List<QueueItem> items) {
+  final fetched = items.where((i) => i.metadata != null).toList();
+  if (fetched.isEmpty) return null;
+
+  final subtitleLangs = <String>{};
+  bool anyHasEnglishAuto = false;
+
+  for (final item in fetched) {
+    final m = item.metadata!;
+    subtitleLangs.addAll(m.availableSubtitleLangs);
+    if (m.availableAutoCaptionLangs.isNotEmpty) anyHasEnglishAuto = true;
+  }
+
+  final hasManualEn = subtitleLangs.any((c) => c == 'en' || c.startsWith('en-'));
+  final autoCaptionLangs = (anyHasEnglishAuto && !hasManualEn) ? ['en'] : <String>[];
+
+  return VideoMetadata(
+    url: '',
+    title: '',
+    uploader: '',
+    duration: null,
+    thumbnailUrl: null,
+    formats: const [],
+    availableSubtitleLangs: (subtitleLangs.toList()..sort()),
+    availableAutoCaptionLangs: autoCaptionLangs,
+  );
+}
 
 /// Playlist download screen.
 ///
@@ -45,6 +78,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   /// True once [_onStartDownload] has been called and the queue is actively
   /// downloading. Hides the configure card and shows the running card.
   bool _started = false;
+
+  /// Merged subtitle metadata computed once after previewAll() completes.
+  /// Passed to the global SubtitleInput so it shows only real available tracks.
+  VideoMetadata? _mergedMeta;
 
   /// Whether to save downloads into a named subfolder (default: true for
   /// playlists per [AppSettings.playlistFolder]).
@@ -171,7 +208,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     );
     q.setGlobalOutputFormat(_globalOutput);
 
-    setState(() => _previewing = false);
+    setState(() {
+      _previewing = false;
+      _mergedMeta = _mergedSubtitleMetadata(q.items);
+    });
   }
 
   void _onBackToSelection() {
@@ -179,6 +219,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     _queueCtrl = null;
     _started = false;
     _previewing = false;
+    _mergedMeta = null;
     setState(() {});
   }
 
@@ -205,6 +246,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     _queueCtrl = null;
     _started = false;
     _previewing = false;
+    _mergedMeta = null;
     _applySettingsDefaults();
     _urlCtrl.clear();
     _folderCtrl.clear();
@@ -601,6 +643,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                     SubtitleInput(
                       value: q.globalSubtitles,
                       outputFormat: _globalOutput,
+                      metadata: _mergedMeta,
                       onChanged: q.setGlobalSubtitles,
                     ),
                     const SizedBox(height: 12),

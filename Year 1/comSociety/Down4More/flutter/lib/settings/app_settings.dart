@@ -28,6 +28,7 @@ class AppSettings extends ChangeNotifier {
   static const _kPlaylistFolder = 'd4m.settings.playlistFolder';
   static const _kDefaultSubtitleLang   = 'd4m.settings.defaultSubtitleLang';
   static const _kDefaultSubtitleFormat = 'd4m.settings.defaultSubtitleFormat';
+  static const _kAppendQualityToFilename = 'd4m.settings.appendQualityToFilename';
 
   SharedPreferences? _prefs;
 
@@ -47,6 +48,7 @@ class AppSettings extends ChangeNotifier {
   bool   _playlistFolder = true;    // default: save playlist downloads into a subfolder
   String _defaultSubtitleLang   = 'en';   // IETF tag, applied when subs are enabled
   String _defaultSubtitleFormat = 'srt';  // srt / vtt / ass / lrc
+  bool   _appendQualityToFilename = false; // append quality label to output filenames
 
   // ── Public getters ─────────────────────────────────────────────────────────
   String get downloadDir    => _downloadDir;
@@ -62,6 +64,7 @@ class AppSettings extends ChangeNotifier {
   bool   get playlistFolder => _playlistFolder;
   String get defaultSubtitleLang   => _defaultSubtitleLang;
   String get defaultSubtitleFormat => _defaultSubtitleFormat;
+  bool   get appendQualityToFilename => _appendQualityToFilename;
 
   /// Convenience: whether a speed cap is configured.
   bool get hasSpeedLimit => _speedLimit.trim().isNotEmpty;
@@ -162,6 +165,12 @@ class AppSettings extends ChangeNotifier {
     await _write(_kDefaultSubtitleFormat, _defaultSubtitleFormat);
   }
 
+  Future<void> setAppendQualityToFilename(bool v) async {
+    _appendQualityToFilename = v;
+    notifyListeners();
+    await _write(_kAppendQualityToFilename, v);
+  }
+
   // ── Load from disk ─────────────────────────────────────────────────────────
 
   Future<void> load() async {
@@ -181,6 +190,7 @@ class AppSettings extends ChangeNotifier {
     _playlistFolder = p.getBool(_kPlaylistFolder)  ?? true;
     _defaultSubtitleLang   = p.getString(_kDefaultSubtitleLang)   ?? 'en';
     _defaultSubtitleFormat = p.getString(_kDefaultSubtitleFormat) ?? 'srt';
+    _appendQualityToFilename = p.getBool(_kAppendQualityToFilename) ?? false;
 
     notifyListeners();
   }

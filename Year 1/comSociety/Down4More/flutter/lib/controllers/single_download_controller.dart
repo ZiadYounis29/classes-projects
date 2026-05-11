@@ -25,7 +25,18 @@ class SingleDownloadController extends ChangeNotifier {
     AppSettings? appSettings,
   })  : _service = service ?? YtDlpService(),
         _defaultOutputDir = defaultOutputDir ?? _platformDownloadsDir,
-        _appSettings = appSettings;
+        _appSettings = appSettings {
+    // React immediately when the user flips the "append quality" toggle in
+    // Settings so the filename field updates without reopening the screen.
+    _appSettings?.addListener(_onSettingsChanged);
+  }
+
+  void _onSettingsChanged() {
+    if (!_filenameManuallyEdited && _metadata != null) {
+      _updateAutoFilename();
+      notifyListeners();
+    }
+  }
 
   final YtDlpService _service;
   final Future<String> Function() _defaultOutputDir;
@@ -91,8 +102,8 @@ class SingleDownloadController extends ChangeNotifier {
       }
       // (If quality is video and format is already video, no snap needed —
       // _selectedOutputFormat already set from defaultOutputFormat above.)
-      _customFilename = m.title;
       _filenameManuallyEdited = false;
+      _updateAutoFilename();
       _progress = const DownloadProgress(phase: DownloadPhase.ready);
     } on YtDlpException catch (e) {
       _progress = DownloadProgress(
@@ -159,6 +170,10 @@ class SingleDownloadController extends ChangeNotifier {
               orElse: () => kDefaultVideoFormat,
             )
           : kDefaultVideoFormat;
+    }
+    // Keep the auto filename in sync with the new quality label.
+    if (!_filenameManuallyEdited && _metadata != null) {
+      _updateAutoFilename();
     }
     notifyListeners();
   }
@@ -229,13 +244,18 @@ class SingleDownloadController extends ChangeNotifier {
 
   void _updateAutoFilename() {
     final title = _metadata?.title ?? '';
+    final appendQuality = _appSettings?.appendQualityToFilename ?? false;
+    final qualitySuffix = (appendQuality && _selectedFormat != null)
+        ? ' [${_selectedFormat!.label}]'
+        : '';
+
     if (_trimStart != null || _trimEnd != null) {
       final startStr = _formatTrimLabel(_trimStart ?? Duration.zero);
       final endStr = _formatTrimLabel(
           _trimEnd ?? _metadata?.duration ?? Duration.zero);
-      _customFilename = '$title [$startStr-$endStr]';
+      _customFilename = '$title$qualitySuffix [$startStr-$endStr]';
     } else {
-      _customFilename = title;
+      _customFilename = '$title$qualitySuffix';
     }
   }
 
@@ -355,6 +375,7 @@ class SingleDownloadController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _appSettings?.removeListener(_onSettingsChanged);
     _resetActiveDownload();
     super.dispose();
   }

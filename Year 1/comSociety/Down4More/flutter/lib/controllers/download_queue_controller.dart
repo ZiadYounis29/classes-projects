@@ -415,6 +415,12 @@ class DownloadQueueController extends ChangeNotifier {
     _qualityTargetHeight = targetHeight;
     _qualityAudioOnly = audioOnly;
 
+    // In per-item mode the user owns each row's selection — don't overwrite.
+    if (_qualityMode == QualityMode.perItem) {
+      notifyListeners();
+      return;
+    }
+
     for (final item in _items) {
       if (item.metadata == null) {
         item.selectedFormat = null;
@@ -427,6 +433,14 @@ class DownloadQueueController extends ChangeNotifier {
 
   /// Apply a global output-format override to every item.
   void setGlobalOutputFormat(OutputFormat? format) {
+    // In per-item mode the user owns each row's format — don't overwrite.
+    if (_qualityMode == QualityMode.perItem) {
+      if (format != null) {
+        _globalSubtitles = _globalSubtitles.snapEmbedFor(format);
+      }
+      notifyListeners();
+      return;
+    }
     for (final item in _items) {
       item.selectedOutputFormat = format;
       if (format != null && item.subtitleSettings != null) {
@@ -581,8 +595,13 @@ class DownloadQueueController extends ChangeNotifier {
           item.title = m.title;
         }
         item.thumbnailUrl ??= m.thumbnailUrl;
-        // Apply the stored preset to this item.
-        _applyPresetToItem(item);
+        // In global mode apply the stored preset; in per-item mode the user
+        // hasn't picked anything for this item yet so fall back to best.
+        if (_qualityMode == QualityMode.global) {
+          _applyPresetToItem(item);
+        } else {
+          item.selectedFormat ??= m.formats.first;
+        }
         notifyListeners();
       } catch (_) {
         // Metadata fetch failed — fall through to the bv*+ba/b fallback below.
@@ -616,6 +635,15 @@ class DownloadQueueController extends ChangeNotifier {
     final SubtitleSettings? subsForService =
         effectiveSubs.enabled ? effectiveSubs : null;
 
+    // When the user has enabled "append quality to filename", build a custom
+    // filename from the item title + quality label so the downloaded file
+    // reflects the chosen quality without the yt-dlp [id] suffix.
+    String? customFilename;
+    if (_appSettings.appendQualityToFilename) {
+      final title = (item.metadata?.title ?? item.title).trim();
+      customFilename = '$title [${format.label}]';
+    }
+
     item.handle = _service.download(
       // Prefer the richer metadata from a preview pass when we have it;
       // otherwise synthesise a minimal one from what addUrls/addEntries
@@ -632,6 +660,7 @@ class DownloadQueueController extends ChangeNotifier {
       format: format,
       outputDir: dir,
       outputExt: outputExt,
+      customFilename: customFilename,
       rateLimit: rateLimit,
       keepPartial: _appSettings.keepPartial,
       subtitles: subsForService,

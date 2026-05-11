@@ -178,7 +178,7 @@ class YtDlpService {
     required VideoFormat format,
     required String outputDir,
     String outputExt = 'mp4',
-    String outputTemplate = '%(title).200B [%(id)s].%(ext)s',
+    String outputTemplate = '%(title).200B.%(ext)s',
     String? customFilename,
     Duration? trimStart,
     Duration? trimEnd,
@@ -225,18 +225,34 @@ class YtDlpService {
           ? 'srt'
           : subtitles.format.trim();
       final canEmbed = !isAudio && kEmbedSubsSupportedExts.contains(outputExt);
-      subtitleArgs = <String>[
-        '--write-subs',
-        if (subtitles.autoTranslate) '--write-auto-subs',
-        '--sub-langs', lang,
-        // --sub-format prefers a specific source format from the server,
-        // --convert-subs guarantees the on-disk extension matches no matter
-        // what yt-dlp downloaded. Pair them so e.g. picking "srt" works
-        // even when only VTT is available.
-        '--sub-format', '$fmt/best',
-        '--convert-subs', fmt,
-        if (subtitles.embed && canEmbed) '--embed-subs',
-      ];
+
+      if (subtitles.useAutoCaption) {
+        // Auto-caption track — use --write-auto-subs exclusively (never
+        // combined with --write-subs, which caused failures previously).
+        // Auto-translated captions are generated on-the-fly by YouTube
+        // and are more prone to HTTP 429 rate-limiting, so we use a
+        // longer sleep and add retry with exponential backoff.
+        subtitleArgs = <String>[
+          '--write-auto-subs',
+          '--sub-langs', lang,
+          '--sub-format', '$fmt/best',
+          '--convert-subs', fmt,
+          if (subtitles.embed && canEmbed) '--embed-subs',
+          '--sleep-subtitles', '3',
+          '--extractor-retries', '5',
+          '--retry-sleep', 'http:linear=2::4',
+        ];
+      } else {
+        // Manual subtitle track selected.
+        subtitleArgs = <String>[
+          '--write-subs',
+          '--sub-langs', lang,
+          '--sub-format', '$fmt/best',
+          '--convert-subs', fmt,
+          if (subtitles.embed && canEmbed) '--embed-subs',
+          '--sleep-subtitles', '1',
+        ];
+      }
     } else {
       subtitleArgs = const <String>[];
     }
@@ -245,6 +261,7 @@ class YtDlpService {
       '--newline',
       '--no-playlist',
       '--no-warnings',
+      '--no-cache-dir',
       '-f', format.id,
       if (isAudio) ...['-x', '--audio-format', ytdlpAudioFmt]
       else ...['--merge-output-format', outputExt],
@@ -402,7 +419,15 @@ class YtDlpService {
 
         final ffResult = await _runner('ffmpeg', ffmpegArgs);
 
-        // Delete the temp file regardless of ffmpeg outcome.
+        // Rename subtitle sidecar files to match the final trimmed name,
+        // then trim their content to the same time window as the video so
+        // the captions stay in sync with the shorter clip.
+        _renameTempSubtitleFiles(tempPath, outputDir, finalName);
+        _trimSubtitleFiles(
+          outputDir, finalName, trimStart ?? Duration.zero, trimEnd,
+        );
+
+        // Delete the temp video file regardless of ffmpeg outcome.
         _deleteTempFile(tempPath);
 
         if (state.cancelled) {
@@ -528,6 +553,185 @@ void _deleteTempFile(String? path) {
     final f = File(path);
     if (f.existsSync()) f.deleteSync();
   } catch (_) {}
+}
+
+/// After trimming, yt-dlp's `--write-subs` may have written sidecar files
+/// like `_d4m_temp_xxx.en.srt` next to the temp video. Rename them to
+/// match the final trimmed filename (e.g. `Title [01m00s-02m00s].en.srt`).
+/// Swallows errors so a missing subtitle never blocks the download.
+void _renameTempSubtitleFiles(
+    String tempVideoPath, String outputDir, String finalBaseName) {
+  try {
+    final tempBase = p.basenameWithoutExtension(tempVideoPath);
+    final dir = Directory(outputDir);
+    if (!dir.existsSync()) return;
+    for (final entity in dir.listSync()) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      // Subtitle sidecars follow the pattern: <tempBase>.<lang>.<subExt>
+      // e.g. _d4m_temp_1234.en.srt, _d4m_temp_1234.ar.vtt
+      if (name.startsWith(tempBase) && name != p.basename(tempVideoPath)) {
+        final suffix = name.substring(tempBase.length); // e.g. ".en.srt"
+        final newPath = p.join(outputDir, '$finalBaseName$suffix');
+        try {
+          entity.renameSync(newPath);
+        } catch (_) {}
+      }
+    }
+  } catch (_) {}
+}
+
+/// Trim every subtitle sidecar that belongs to [finalBaseName] so only cues
+/// within [start]..[end] survive, with timestamps shifted back by [start].
+/// Supports SRT and VTT. Swallows all errors.
+void _trimSubtitleFiles(
+    String outputDir, String finalBaseName, Duration start, Duration? end) {
+  try {
+    final dir = Directory(outputDir);
+    if (!dir.existsSync()) return;
+    for (final entity in dir.listSync()) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      if (!name.startsWith(finalBaseName)) continue;
+      final ext = p.extension(name).toLowerCase();
+      if (ext != '.srt' && ext != '.vtt') continue;
+      try {
+        final content = entity.readAsStringSync();
+        final trimmed = ext == '.srt'
+            ? _trimSrt(content, start, end)
+            : _trimVtt(content, start, end);
+        entity.writeAsStringSync(trimmed);
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+/// Parse and trim an SRT subtitle string.
+String _trimSrt(String content, Duration start, Duration? end) {
+  final blocks = content.split(RegExp(r'\n\s*\n'));
+  final buf = StringBuffer();
+  int idx = 1;
+  for (final block in blocks) {
+    final lines = block.trim().split('\n');
+    if (lines.length < 3) continue;
+    // SRT timestamp line: 00:01:30,500 --> 00:01:35,000
+    final match = RegExp(
+      r'(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})',
+    ).firstMatch(lines[1]);
+    if (match == null) continue;
+    final cueStart = _parseSrtTs(match.group(1)!);
+    final cueEnd = _parseSrtTs(match.group(2)!);
+    if (cueStart == null || cueEnd == null) continue;
+    // Skip cues entirely outside the trim window.
+    if (cueEnd <= start) continue;
+    if (end != null && cueStart >= end) continue;
+    // Clamp and shift.
+    final newStart = (cueStart < start ? Duration.zero : cueStart - start);
+    final Duration newEnd;
+    if (end != null && cueEnd > end) {
+      newEnd = end - start;
+    } else {
+      newEnd = cueEnd - start;
+    }
+    final text = lines.sublist(2).join('\n');
+    buf.writeln(idx);
+    buf.writeln('${_toSrtTs(newStart)} --> ${_toSrtTs(newEnd)}');
+    buf.writeln(text);
+    buf.writeln();
+    idx++;
+  }
+  return buf.toString();
+}
+
+/// Parse and trim a WebVTT subtitle string.
+String _trimVtt(String content, Duration start, Duration? end) {
+  final lines = content.split('\n');
+  final buf = StringBuffer();
+  buf.writeln('WEBVTT');
+  buf.writeln();
+  int i = 0;
+  // Skip header lines.
+  while (i < lines.length && !lines[i].contains('-->')) {
+    i++;
+  }
+  while (i < lines.length) {
+    final tsMatch = RegExp(
+      r'(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})',
+    ).firstMatch(lines[i]);
+    if (tsMatch == null) {
+      i++;
+      continue;
+    }
+    final cueStart = _parseVttTs(tsMatch.group(1)!);
+    final cueEnd = _parseVttTs(tsMatch.group(2)!);
+    i++;
+    if (cueStart == null || cueEnd == null) continue;
+    // Collect cue text.
+    final textLines = <String>[];
+    while (i < lines.length && lines[i].trim().isNotEmpty) {
+      textLines.add(lines[i]);
+      i++;
+    }
+    // Skip blank separator lines.
+    while (i < lines.length && lines[i].trim().isEmpty) {
+      i++;
+    }
+    if (cueEnd <= start) continue;
+    if (end != null && cueStart >= end) continue;
+    final newStart = (cueStart < start ? Duration.zero : cueStart - start);
+    final Duration newEnd;
+    if (end != null && cueEnd > end) {
+      newEnd = end - start;
+    } else {
+      newEnd = cueEnd - start;
+    }
+    buf.writeln('${_toVttTs(newStart)} --> ${_toVttTs(newEnd)}');
+    for (final l in textLines) {
+      buf.writeln(l);
+    }
+    buf.writeln();
+  }
+  return buf.toString();
+}
+
+Duration? _parseSrtTs(String s) {
+  // 00:01:30,500
+  final m = RegExp(r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})').firstMatch(s);
+  if (m == null) return null;
+  return Duration(
+    hours: int.parse(m.group(1)!),
+    minutes: int.parse(m.group(2)!),
+    seconds: int.parse(m.group(3)!),
+    milliseconds: int.parse(m.group(4)!),
+  );
+}
+
+Duration? _parseVttTs(String s) {
+  // 00:01:30.500
+  final m = RegExp(r'(\d{2}):(\d{2}):(\d{2})\.(\d{3})').firstMatch(s);
+  if (m == null) return null;
+  return Duration(
+    hours: int.parse(m.group(1)!),
+    minutes: int.parse(m.group(2)!),
+    seconds: int.parse(m.group(3)!),
+    milliseconds: int.parse(m.group(4)!),
+  );
+}
+
+String _toSrtTs(Duration d) {
+  final h = d.inHours.toString().padLeft(2, '0');
+  final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  final ms = d.inMilliseconds.remainder(1000).toString().padLeft(3, '0');
+  return '$h:$m:$s,$ms';
+}
+
+String _toVttTs(Duration d) {
+  final h = d.inHours.toString().padLeft(2, '0');
+  final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  final ms = d.inMilliseconds.remainder(1000).toString().padLeft(3, '0');
+  return '$h:$m:$s.$ms';
 }
 
 

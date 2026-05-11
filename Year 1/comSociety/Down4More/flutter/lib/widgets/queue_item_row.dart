@@ -73,7 +73,10 @@ class QueueItemRow extends StatelessWidget {
             if (item.metadata != null &&
                 item.previewError == null &&
                 progress.phase != DownloadPhase.downloading &&
-                progress.phase != DownloadPhase.trimming) ...[
+                progress.phase != DownloadPhase.trimming &&
+                progress.phase != DownloadPhase.finished &&
+                progress.phase != DownloadPhase.error &&
+                progress.phase != DownloadPhase.cancelled) ...[
               const SizedBox(height: 6),
               if (queue.qualityMode == QualityMode.perItem) ...[
                 _buildPerItemControls(context),
@@ -313,6 +316,7 @@ class QueueItemRow extends StatelessWidget {
     return SubtitleInput(
       value: effective,
       outputFormat: selectedOutput,
+      metadata: item.metadata,
       compact: true,
       onChanged: (s) => queue.setItemSubtitleSettings(item, s),
     );
