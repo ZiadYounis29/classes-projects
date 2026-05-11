@@ -227,9 +227,8 @@ class YtDlpService {
       final canEmbed = !isAudio && kEmbedSubsSupportedExts.contains(outputExt);
 
       if (subtitles.useAutoCaption) {
-        // Auto-caption track (English only) — use --write-auto-subs exclusively.
-        // This is the fallback path for videos that have no manually-uploaded
-        // English subtitle track but do have an auto-generated one.
+        // Auto-caption track — use --write-auto-subs exclusively (never
+        // combined with --write-subs, which caused failures previously).
         subtitleArgs = <String>[
           '--write-auto-subs',
           '--sub-langs', lang,

@@ -120,8 +120,6 @@ class SubtitleSettings {
   /// yt-dlp's `automatic_captions` field) rather than a manually-uploaded
   /// subtitle. The download service uses `--write-auto-subs` exclusively
   /// (no `--write-subs`) and passes the lang code via `--sub-langs`.
-  /// Auto-captions are always English — this flag is set automatically when
-  /// the video has no manual English subtitle track.
   final bool useAutoCaption;
 
   static const SubtitleSettings disabled = SubtitleSettings();

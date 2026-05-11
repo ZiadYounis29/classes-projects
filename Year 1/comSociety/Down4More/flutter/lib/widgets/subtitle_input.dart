@@ -127,6 +127,10 @@ class _SubtitleInputState extends State<SubtitleInput> {
     _emit(widget.value.copyWith(embed: on));
   }
 
+  void _setAutoCaption(bool on) {
+    _emit(widget.value.copyWith(useAutoCaption: on));
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -224,6 +228,12 @@ class _SubtitleInputState extends State<SubtitleInput> {
             outputFormat: widget.outputFormat,
             onChanged: _setEmbed,
           ),
+          const SizedBox(height: 4),
+          _AutoCaptionToggle(
+            value: widget.value.useAutoCaption,
+            enabled: widget.enabled && on,
+            onChanged: _setAutoCaption,
+          ),
         ],
       ),
     );
@@ -314,19 +324,15 @@ class _LanguageRowState extends State<_LanguageRow> {
         for (final code in m.availableSubtitleLangs)
           _LangOption(code, _langLabel(code), isAuto: false),
       ];
-      // Add English auto-caption only when no manual English track exists.
-      final hasManualEn = m.availableSubtitleLangs.any(
-          (c) => c == 'en' || c.startsWith('en-'));
-      if (!hasManualEn && m.availableAutoCaptionLangs.isNotEmpty) {
-        // Pick the most generic English auto-caption code available
-        // ('en' preferred over 'en-orig', etc.).
-        final enCode = m.availableAutoCaptionLangs.firstWhere(
-          (c) => c == 'en',
-          orElse: () => m.availableAutoCaptionLangs
-              .firstWhere((c) => c.startsWith('en-'), orElse: () => ''),
-        );
-        if (enCode.isNotEmpty) {
-          opts.add(_LangOption(enCode, 'English (auto)', isAuto: true));
+      // Add auto-caption tracks for common languages. Skip languages
+      // that already have a manual subtitle track to avoid duplicates.
+      for (final code in m.availableAutoCaptionLangs) {
+        if (m.availableSubtitleLangs.contains(code)) continue;
+        // Only show languages from the common list to keep the dropdown
+        // manageable — YouTube typically has 100+ auto-translated langs.
+        if (kSubtitleLanguages.any((l) => l.code == code)) {
+          opts.add(
+              _LangOption(code, '${_langLabel(code)} (auto)', isAuto: true));
         }
       }
       return opts;
@@ -527,11 +533,8 @@ class _LanguageRowState extends State<_LanguageRow> {
       parts.add('${m.availableSubtitleLangs.length} subtitle track'
           '${m.availableSubtitleLangs.length == 1 ? '' : 's'}');
     }
-    // Auto-captions are English-only; just indicate presence rather than count.
     if (m.availableAutoCaptionLangs.isNotEmpty) {
-      final hasManualEn = m.availableSubtitleLangs.any(
-          (c) => c == 'en' || c.startsWith('en-'));
-      if (!hasManualEn) parts.add('English auto-captions available');
+      parts.add('auto-captions available');
     }
     return parts.join(', ');
   }
@@ -655,6 +658,49 @@ class _EmbedToggle extends StatelessWidget {
           style: theme.textTheme.bodySmall?.copyWith(
             color: scheme.onSurfaceVariant,
           ),
+        ),
+      ),
+    );
+  }
+}
+
+// ── Auto-caption toggle ──────────────────────────────────────────────────────
+
+class _AutoCaptionToggle extends StatelessWidget {
+  const _AutoCaptionToggle({
+    required this.value,
+    required this.enabled,
+    required this.onChanged,
+  });
+
+  final bool value;
+  final bool enabled;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final scheme = theme.colorScheme;
+    return SwitchListTile(
+      value: value,
+      onChanged: enabled ? onChanged : null,
+      contentPadding: EdgeInsets.zero,
+      dense: true,
+      title: Text(
+        'Use auto-captions',
+        style: theme.textTheme.bodyMedium?.copyWith(
+          color: enabled ? scheme.onSurface : scheme.onSurfaceVariant,
+          fontWeight: FontWeight.w500,
+        ),
+      ),
+      subtitle: Text(
+        value
+            ? 'Downloading auto-generated / auto-translated captions '
+              '(available for most YouTube videos in any language).'
+            : 'Download manually-uploaded subtitles only. Turn this on '
+              'if the video has no manual subs in your language.',
+        style: theme.textTheme.bodySmall?.copyWith(
+          color: scheme.onSurfaceVariant,
         ),
       ),
     );

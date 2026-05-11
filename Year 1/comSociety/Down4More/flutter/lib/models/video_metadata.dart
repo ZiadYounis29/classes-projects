@@ -118,18 +118,15 @@ class VideoMetadata {
         ? (subtitlesMap.keys.toList()..sort())
         : <String>[];
 
-    // Parse auto-generated caption language codes. We only surface English
-    // auto-captions ('en' and 'en-*' variants such as 'en-orig') — these
-    // are used as a fallback when the video has no manually-uploaded English
-    // subtitle track. Non-English auto-translated variants are excluded.
+    // Parse auto-generated / auto-translated caption language codes.
+    // Include all available languages so the auto-captions toggle can
+    // offer any track the video supports.
     final autoCaptionsMap = json['automatic_captions'] as Map<String, dynamic>?;
     final availableAutoCaptionLangs = autoCaptionsMap != null
-        ? (autoCaptionsMap.keys.where((k) {
-            if (k == 'live_chat') return false;
-            if (k == 'en') return true;
-            return k.startsWith('en-');
-          }).toList()
-            ..sort())
+        ? (autoCaptionsMap.keys
+            .where((k) => k != 'live_chat')
+            .toList()
+          ..sort())
         : <String>[];
 
     return VideoMetadata(
