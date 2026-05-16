@@ -1,4 +1,5 @@
 import 'package:down4more/main.dart';
+import 'package:down4more/services/download_history.dart';
 import 'package:down4more/settings/app_settings.dart';
 import 'package:down4more/theme/theme_controller.dart';
 import 'package:flutter/material.dart';
@@ -23,8 +24,14 @@ void main() {
 
     final appSettings = AppSettings();
     await appSettings.load();
+    final history = DownloadHistory();
+    await history.load();
 
-    await tester.pumpWidget(Down4MoreApp(themeController: controller, appSettings: appSettings));
+    await tester.pumpWidget(Down4MoreApp(
+      themeController: controller,
+      appSettings: appSettings,
+      history: history,
+    ));
     // Use pump() instead of pumpAndSettle() because IndexedStack keeps all
     // tab screens alive and some contain ongoing animations.
     await tester.pump();
@@ -34,6 +41,7 @@ void main() {
     expect(find.text('Playlist'), findsOneWidget);
     expect(find.text('Batch'), findsOneWidget);
     expect(find.text('My Files'), findsOneWidget);
+    expect(find.text('History'), findsOneWidget);
     expect(find.text('Settings'), findsOneWidget);
   });
 
@@ -48,8 +56,14 @@ void main() {
 
     final appSettings = AppSettings();
     await appSettings.load();
+    final history = DownloadHistory();
+    await history.load();
 
-    await tester.pumpWidget(Down4MoreApp(themeController: controller, appSettings: appSettings));
+    await tester.pumpWidget(Down4MoreApp(
+      themeController: controller,
+      appSettings: appSettings,
+      history: history,
+    ));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 500));
 

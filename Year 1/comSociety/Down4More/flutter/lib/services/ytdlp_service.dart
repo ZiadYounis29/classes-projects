@@ -887,23 +887,30 @@ class DownloadHandle {
 
 /// Suspend a process at the OS level so it genuinely stops consuming network.
 /// On POSIX sends SIGSTOP; on Windows P/Invokes NtSuspendProcess via PowerShell.
+///
+/// Failures are logged with [debugPrint] (no-op in release builds) and the
+/// function returns `false` so callers can decide whether to surface the
+/// failure to the user. The yt-dlp process stays running on failure.
 Future<bool> _suspendProcess(int pid) async {
   try {
     if (Platform.isWindows) {
-      final script =
-          r'$sig=@"' '\n'
-          r'[DllImport("ntdll.dll")] public static extern int NtSuspendProcess(IntPtr h);' '\n'
-          r'"@' '\n'
-          r'$t=Add-Type -MemberDefinition $sig -Name NT -Namespace W -PassThru;' '\n'
-          r'$h=(Get-Process -Id ' + pid.toString() + r').Handle;' '\n'
-          r'$t::NtSuspendProcess($h)';
+      final script = _windowsSuspendScript(pid, suspend: true);
       final result = await Process.run(
           'powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
+      if (result.exitCode != 0) {
+        debugPrint(
+            'ytdlp_service: NtSuspendProcess($pid) failed: ${result.stderr}');
+      }
       return result.exitCode == 0;
     } else {
-      return Process.killPid(pid, ProcessSignal.sigstop);
+      final ok = Process.killPid(pid, ProcessSignal.sigstop);
+      if (!ok) {
+        debugPrint('ytdlp_service: SIGSTOP to pid=$pid returned false');
+      }
+      return ok;
     }
-  } catch (_) {
+  } catch (e) {
+    debugPrint('ytdlp_service: _suspendProcess($pid) threw: $e');
     return false;
   }
 }
@@ -912,22 +919,41 @@ Future<bool> _suspendProcess(int pid) async {
 Future<bool> _resumeProcess(int pid) async {
   try {
     if (Platform.isWindows) {
-      final script =
-          r'$sig=@"' '\n'
-          r'[DllImport("ntdll.dll")] public static extern int NtResumeProcess(IntPtr h);' '\n'
-          r'"@' '\n'
-          r'$t=Add-Type -MemberDefinition $sig -Name NTR -Namespace W -PassThru;' '\n'
-          r'$h=(Get-Process -Id ' + pid.toString() + r').Handle;' '\n'
-          r'$t::NtResumeProcess($h)';
+      final script = _windowsSuspendScript(pid, suspend: false);
       final result = await Process.run(
           'powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
+      if (result.exitCode != 0) {
+        debugPrint(
+            'ytdlp_service: NtResumeProcess($pid) failed: ${result.stderr}');
+      }
       return result.exitCode == 0;
     } else {
-      return Process.killPid(pid, ProcessSignal.sigcont);
+      final ok = Process.killPid(pid, ProcessSignal.sigcont);
+      if (!ok) {
+        debugPrint('ytdlp_service: SIGCONT to pid=$pid returned false');
+      }
+      return ok;
     }
-  } catch (_) {
+  } catch (e) {
+    debugPrint('ytdlp_service: _resumeProcess($pid) threw: $e');
     return false;
   }
+}
+
+/// PowerShell snippet that P/Invokes [NtSuspendProcess] / [NtResumeProcess]
+/// from ntdll.dll. [pid] is interpolated directly — it's an int so there is
+/// no quoting risk. Errors propagate as a non-zero exit code so the caller
+/// can log the stderr.
+String _windowsSuspendScript(int pid, {required bool suspend}) {
+  final fn = suspend ? 'NtSuspendProcess' : 'NtResumeProcess';
+  final type = suspend ? 'NT' : 'NTR';
+  return '\$ErrorActionPreference="Stop"\n'
+      '\$sig=@"\n'
+      '[DllImport("ntdll.dll")] public static extern int $fn(IntPtr h);\n'
+      '"@\n'
+      '\$t=Add-Type -MemberDefinition \$sig -Name $type -Namespace W -PassThru;\n'
+      '\$h=(Get-Process -Id $pid).Handle;\n'
+      '\$t::$fn(\$h)';
 }
 
 /// Thrown by [YtDlpService.fetchMetadata] for any failure (process missing,

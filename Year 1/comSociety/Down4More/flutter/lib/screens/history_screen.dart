@@ -241,7 +241,7 @@ class _HistoryRow extends StatelessWidget {
       margin: const EdgeInsets.only(bottom: 4),
       // Tint failed rows very slightly so they stand out at a glance.
       color: isFailed
-          ? scheme.errorContainer.withOpacity(0.25)
+          ? scheme.errorContainer.withValues(alpha: 0.25)
           : null,
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -278,7 +278,7 @@ class _HistoryRow extends StatelessWidget {
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: theme.textTheme.bodySmall?.copyWith(
-                            color: scheme.primary.withOpacity(0.8),
+                            color: scheme.primary.withValues(alpha: 0.8),
                           ),
                         ),
                       const SizedBox(height: 2),
@@ -287,7 +287,7 @@ class _HistoryRow extends StatelessWidget {
                         _meta(),
                         style: theme.textTheme.bodySmall?.copyWith(
                           color: isFailed
-                              ? scheme.error.withOpacity(0.8)
+                              ? scheme.error.withValues(alpha: 0.8)
                               : scheme.onSurfaceVariant,
                         ),
                       ),
@@ -339,7 +339,7 @@ class _HistoryRow extends StatelessWidget {
                 width: double.infinity,
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                 decoration: BoxDecoration(
-                  color: scheme.errorContainer.withOpacity(0.4),
+                  color: scheme.errorContainer.withValues(alpha: 0.4),
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(

@@ -976,21 +976,23 @@ class DownloadQueueController extends ChangeNotifier {
         item.subscription = null;
 
         // Record downloads in history (finished, failed, or cancelled).
-        if (_history != null) {
+        final history = _history;
+        if (history != null) {
           final title = item.metadata?.title ?? item.title;
+          final outputPath = item.progress.outputPath;
           if (item.progress.phase == DownloadPhase.finished &&
-              item.progress.outputPath != null) {
-            _history!.add(HistoryEntry(
+              outputPath != null) {
+            history.add(HistoryEntry(
               id: '${DateTime.now().millisecondsSinceEpoch}_${item.url.hashCode}',
               title: title,
               url: item.url,
-              outputPath: item.progress.outputPath!,
+              outputPath: outputPath,
               finishedAt: DateTime.now(),
               quality: item.selectedFormat?.label ?? '',
               outputExt: item.selectedOutputFormat?.ext ?? '',
             ));
           } else if (item.progress.phase == DownloadPhase.cancelled) {
-            _history!.add(HistoryEntry(
+            history.add(HistoryEntry(
               id: '${DateTime.now().millisecondsSinceEpoch}_${item.url.hashCode}',
               title: title,
               url: item.url,
@@ -1011,7 +1013,7 @@ class DownloadQueueController extends ChangeNotifier {
             _history != null) {
           // No retries — log as failed.
           final title = item.metadata?.title ?? item.title;
-          _history!.add(HistoryEntry(
+          _history.add(HistoryEntry(
             id: '${DateTime.now().millisecondsSinceEpoch}_${item.url.hashCode}',
             title: title,
             url: item.url,

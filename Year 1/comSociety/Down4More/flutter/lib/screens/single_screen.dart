@@ -9,7 +9,6 @@ import '../models/download_progress.dart';
 import '../models/subtitle_settings.dart';
 import '../services/download_history.dart';
 import '../settings/app_settings.dart';
-import '../widgets/format_dropdown.dart' show formatBytes;
 import '../widgets/download_progress_view.dart';
 import '../widgets/format_dropdown.dart';
 import '../widgets/metadata_card.dart';
@@ -277,8 +276,8 @@ class SingleScreenState extends State<SingleScreen> {
                             Builder(builder: (context) {
                               final estimatedBytes = selectedOutput.estimateBytes(
                                 sourceVideoBytes: selected.fileSize,
-                                sourceAudioBytes: metadata?.audioOnlyFormat?.fileSize,
-                                duration: metadata?.duration,
+                                sourceAudioBytes: metadata.audioOnlyFormat?.fileSize,
+                                duration: metadata.duration,
                               );
                               if (estimatedBytes == null) return const SizedBox.shrink();
                               return Row(children: [

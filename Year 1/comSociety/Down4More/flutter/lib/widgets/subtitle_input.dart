@@ -164,7 +164,7 @@ class _SubtitleInputState extends State<SubtitleInput> {
                   : Icons.closed_caption_rounded,
               size: widget.compact ? 16 : 18,
               color: _hasNoCaptions
-                  ? scheme.onSurfaceVariant.withOpacity(0.5)
+                  ? scheme.onSurfaceVariant.withValues(alpha: 0.5)
                   : on
                       ? scheme.primary
                       : scheme.onSurfaceVariant,
@@ -180,7 +180,7 @@ class _SubtitleInputState extends State<SubtitleInput> {
                     style: theme.textTheme.bodyMedium?.copyWith(
                       fontWeight: FontWeight.w600,
                       color: _hasNoCaptions
-                          ? scheme.onSurfaceVariant.withOpacity(0.5)
+                          ? scheme.onSurfaceVariant.withValues(alpha: 0.5)
                           : on
                               ? scheme.primary
                               : scheme.onSurface,
@@ -196,7 +196,7 @@ class _SubtitleInputState extends State<SubtitleInput> {
                     overflow: TextOverflow.ellipsis,
                     style: theme.textTheme.bodySmall?.copyWith(
                       color: _hasNoCaptions
-                          ? scheme.onSurfaceVariant.withOpacity(0.5)
+                          ? scheme.onSurfaceVariant.withValues(alpha: 0.5)
                           : scheme.onSurfaceVariant,
                       fontStyle: _hasNoCaptions
                           ? FontStyle.italic
@@ -221,7 +221,7 @@ class _SubtitleInputState extends State<SubtitleInput> {
               Icon(
                 Icons.block_outlined,
                 size: 18,
-                color: scheme.onSurfaceVariant.withOpacity(0.4),
+                color: scheme.onSurfaceVariant.withValues(alpha: 0.4),
               ),
           ],
         ),
@@ -269,11 +269,11 @@ class _SubtitleInputState extends State<SubtitleInput> {
 
     return Card(
       margin: EdgeInsets.zero,
-      color: _hasNoCaptions ? scheme.surfaceContainerLow.withOpacity(0.6) : scheme.surfaceContainerLow,
+      color: _hasNoCaptions ? scheme.surfaceContainerLow.withValues(alpha: 0.6) : scheme.surfaceContainerLow,
       elevation: 0,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
-        side: BorderSide(color: _hasNoCaptions ? scheme.outlineVariant.withOpacity(0.5) : scheme.outlineVariant),
+        side: BorderSide(color: _hasNoCaptions ? scheme.outlineVariant.withValues(alpha: 0.5) : scheme.outlineVariant),
       ),
       child: Column(
         mainAxisSize: MainAxisSize.min,

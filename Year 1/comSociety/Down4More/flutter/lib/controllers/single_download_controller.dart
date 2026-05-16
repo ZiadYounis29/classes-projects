@@ -330,8 +330,9 @@ class SingleDownloadController extends ChangeNotifier {
           });
         } else {
           // Retries exhausted (or disabled) — log to history as failed.
-          if (_history != null) {
-            _history!.add(HistoryEntry(
+          final history = _history;
+          if (history != null) {
+            history.add(HistoryEntry(
               id: '${DateTime.now().millisecondsSinceEpoch}_single',
               title: _metadata?.title ?? '',
               url: _metadata?.url ?? '',
@@ -345,8 +346,9 @@ class SingleDownloadController extends ChangeNotifier {
           }
         }
       } else if (event.phase == DownloadPhase.cancelled) {
-        if (_history != null) {
-          _history!.add(HistoryEntry(
+        final history = _history;
+        if (history != null) {
+          history.add(HistoryEntry(
             id: '${DateTime.now().millisecondsSinceEpoch}_single',
             title: _metadata?.title ?? '',
             url: _metadata?.url ?? '',
@@ -362,12 +364,14 @@ class SingleDownloadController extends ChangeNotifier {
         // Fire-and-forget: OS notification + history log.
         final title = _metadata?.title ?? '';
         NotificationService.notifyFinished(title);
-        if (_history != null && event.outputPath != null) {
-          _history!.add(HistoryEntry(
+        final history = _history;
+        final outputPath = event.outputPath;
+        if (history != null && outputPath != null) {
+          history.add(HistoryEntry(
             id: '${DateTime.now().millisecondsSinceEpoch}_single',
             title: title,
             url: _metadata?.url ?? '',
-            outputPath: event.outputPath!,
+            outputPath: outputPath,
             finishedAt: DateTime.now(),
             quality: _selectedFormat?.label ?? '',
             outputExt: _selectedOutputFormat.ext,
