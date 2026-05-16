@@ -12,10 +12,15 @@ import 'package:flutter/services.dart';
 ///
 /// Calls [onChanged] whenever either field changes to a valid (or cleared)
 /// value. [onChanged] receives (start, end) where either may be null.
+///
+/// [onValidityChanged] is called whenever the trim error state changes — true
+/// means there is at least one validation error currently shown (e.g. end
+/// before start, exceeds duration). Use this to disable the download button.
 class TrimInput extends StatefulWidget {
   const TrimInput({
     super.key,
     required this.onChanged,
+    this.onValidityChanged,
     this.enabled = true,
     this.videoDuration,
   });
@@ -23,6 +28,10 @@ class TrimInput extends StatefulWidget {
   /// Called whenever the parsed trim window changes. Both args are null when
   /// the fields are empty / invalid.
   final void Function(Duration? start, Duration? end) onChanged;
+
+  /// Called whenever the error state changes. [hasError] is true when one or
+  /// more fields are in an error state. Null when the caller doesn't care.
+  final void Function(bool hasError)? onValidityChanged;
 
   final bool enabled;
 
@@ -73,18 +82,24 @@ class _TrimInputState extends State<TrimInput> {
       endErr = 'Exceeds video length';
     }
 
+    final hadError = (_startError != null || _endError != null);
+    final hasError = (startErr != null || endErr != null);
+
     setState(() {
       _startError = startErr;
       _endError = endErr;
     });
 
+    // Notify caller when validity flips so the download button can be gated.
+    if (hasError != hadError) {
+      widget.onValidityChanged?.call(hasError);
+    }
+
     // Only fire the callback when both set values are valid (or cleared).
     final validStart = startErr == null ? start : null;
     final validEnd = endErr == null ? end : null;
 
-    final hasStartErr = startErr != null;
-    final hasEndErr = endErr != null;
-    if (!hasStartErr && !hasEndErr) {
+    if (!hasError) {
       widget.onChanged(validStart, validEnd);
     }
   }
@@ -132,35 +147,32 @@ class _TrimInputState extends State<TrimInput> {
                     color: hasTrim ? scheme.primary : scheme.onSurfaceVariant,
                   ),
                   const SizedBox(width: 10),
-                  Text(
-                    'Trim segment',
-                    style: theme.textTheme.bodyMedium?.copyWith(
-                      fontWeight: FontWeight.w600,
-                      color: hasTrim ? scheme.primary : scheme.onSurface,
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          'Trim segment',
+                          style: theme.textTheme.bodyMedium?.copyWith(
+                            fontWeight: FontWeight.w600,
+                            color: hasTrim ? scheme.primary : scheme.onSurface,
+                          ),
+                        ),
+                        if (!_expanded || !hasTrim)
+                          Text(
+                            hasTrim
+                                ? _rangeSummary()
+                                : 'Optional — clip a specific segment',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: theme.textTheme.bodySmall?.copyWith(
+                              color: scheme.onSurfaceVariant,
+                            ),
+                          ),
+                      ],
                     ),
                   ),
-                  const SizedBox(width: 8),
-                  // Show the current range as a hint when collapsed.
-                  if (!_expanded && hasTrim)
-                    Expanded(
-                      child: Text(
-                        _rangeSummary(),
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    )
-                  else
-                    Expanded(
-                      child: Text(
-                        'Optional — clip a specific segment',
-                        style: theme.textTheme.bodySmall?.copyWith(
-                          color: scheme.onSurfaceVariant,
-                        ),
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
                   Icon(
                     _expanded ? Icons.expand_less : Icons.expand_more,
                     color: scheme.onSurfaceVariant,
@@ -356,9 +368,9 @@ class _DigitShiftField extends StatelessWidget {
 }
 
 /// Strips non-digits, caps to 6 digits, then re-renders the time string with
-/// auto-inserted colons. The cursor is reset to the end after every edit so
-/// the digit-shift behaviour feels like a calculator rather than a free-form
-/// text field.
+/// auto-inserted colons. The cursor position is preserved relative to the
+/// surrounding digits so that mid-field edits (delete-then-retype) feel
+/// natural instead of snapping to the far right every keystroke.
 @visibleForTesting
 class DigitShiftFormatter extends TextInputFormatter {
   const DigitShiftFormatter();
@@ -368,23 +380,64 @@ class DigitShiftFormatter extends TextInputFormatter {
     TextEditingValue oldValue,
     TextEditingValue newValue,
   ) {
-    final raw = newValue.text.replaceAll(RegExp(r'[^0-9]'), '');
-    // The formatter pads its display with leading zeros (`5` → `0:05`), so
-    // when the previous text is fed back in on the next keystroke those
-    // padding zeros would be re-absorbed as real digits. That widens
-    // intermediate states beyond what the user actually typed (`5,5` ends
-    // up as `00:55` instead of `0:55`). Drop a single run of leading zeros
-    // so the digit count tracks the user's keystrokes.
-    final digits = raw.replaceFirst(RegExp(r'^0+'), '');
-    final capped = digits.length > 6
-        ? digits.substring(digits.length - 6)
-        : digits;
+    final newText = newValue.text;
+    final cursorOffset =
+        newValue.selection.baseOffset.clamp(0, newText.length);
+
+    // Count how many digit characters fall before the cursor in the raw
+    // (pre-format) new value so we can map that position into the
+    // formatted output.
+    int digitsBeforeCursor = 0;
+    for (int i = 0; i < cursorOffset; i++) {
+      if (_isDigit(newText[i])) digitsBeforeCursor++;
+    }
+
+    final raw = newText.replaceAll(RegExp(r'[^0-9]'), '');
+    // Drop leading padding zeros so the digit count tracks real keystrokes.
+    final stripped = raw.replaceFirst(RegExp(r'^0+'), '');
+    final capped = stripped.length > 6
+        ? stripped.substring(stripped.length - 6)
+        : stripped;
     final formatted = formatDigitsAsTime(capped);
+
+    // How many leading zeros were stripped from the raw digits?
+    final zerosStripped = raw.length - stripped.length;
+    final adjustedDigits =
+        (digitsBeforeCursor - zerosStripped).clamp(0, capped.length);
+
+    // Padding zeros the formatter may have prepended (e.g. "5" → "0:05").
+    int formattedDigitCount = 0;
+    for (int i = 0; i < formatted.length; i++) {
+      if (_isDigit(formatted[i])) formattedDigitCount++;
+    }
+    final paddingDigits = formattedDigitCount - capped.length;
+    final targetDigits = adjustedDigits + paddingDigits;
+
+    // Walk the formatted string to find the character position after
+    // [targetDigits] digit characters.
+    int pos = formatted.length;
+    int seen = 0;
+    for (int i = 0; i < formatted.length; i++) {
+      if (seen >= targetDigits) {
+        pos = i;
+        break;
+      }
+      if (_isDigit(formatted[i])) seen++;
+      if (seen >= targetDigits) {
+        pos = i + 1;
+        break;
+      }
+    }
+
     return TextEditingValue(
       text: formatted,
-      selection: TextSelection.collapsed(offset: formatted.length),
+      selection:
+          TextSelection.collapsed(offset: pos.clamp(0, formatted.length)),
     );
   }
+
+  static bool _isDigit(String c) =>
+      c.codeUnitAt(0) >= 48 && c.codeUnitAt(0) <= 57;
 }
 
 /// Right-aligned time formatter that powers the digit-shift entry field.

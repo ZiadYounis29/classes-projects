@@ -1,12 +1,15 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/single_download_controller.dart';
 import '../models/download_progress.dart';
 import '../models/subtitle_settings.dart';
+import '../services/download_history.dart';
 import '../settings/app_settings.dart';
+import '../widgets/format_dropdown.dart' show formatBytes;
 import '../widgets/download_progress_view.dart';
 import '../widgets/format_dropdown.dart';
 import '../widgets/metadata_card.dart';
@@ -16,20 +19,22 @@ import '../widgets/trim_input.dart';
 
 /// Single-URL download screen.
 class SingleScreen extends StatefulWidget {
-  const SingleScreen({super.key, this.controller, this.appSettings});
+  const SingleScreen({super.key, this.controller, this.appSettings, this.history});
 
   final SingleDownloadController? controller;
   final AppSettings? appSettings;
+  final DownloadHistory? history;
 
   @override
-  State<SingleScreen> createState() => _SingleScreenState();
+  State<SingleScreen> createState() => SingleScreenState();
 }
 
-class _SingleScreenState extends State<SingleScreen> {
+class SingleScreenState extends State<SingleScreen> {
   late final SingleDownloadController _controller;
   late final TextEditingController _urlController;
   late final TextEditingController _filenameController;
   bool _ownsController = false;
+  bool _trimHasError = false;
 
   @override
   void initState() {
@@ -39,12 +44,42 @@ class _SingleScreenState extends State<SingleScreen> {
     if (widget.controller != null) {
       _controller = widget.controller!;
     } else {
-      _controller = SingleDownloadController(appSettings: widget.appSettings);
+      _controller = SingleDownloadController(
+        appSettings: widget.appSettings,
+        history: widget.history,
+      );
       _ownsController = true;
     }
     // Sync the filename text field when the controller updates it
     // (e.g. after metadata fetch or trim change).
     _controller.addListener(_syncFilenameField);
+
+    // Clipboard auto-detect: if the clipboard contains a URL that looks like
+    // a supported video link, pre-fill the input and kick off metadata fetch
+    // automatically so the user doesn't have to paste manually.
+    _checkClipboardForUrl();
+  }
+
+  static const _urlPattern = r'https?://(www\.)?(youtube\.com|youtu\.be|instagram\.com|tiktok\.com|twitter\.com|x\.com|facebook\.com|fb\.watch|vimeo\.com|dailymotion\.com|twitch\.tv)';
+
+  Future<void> _checkClipboardForUrl() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final text = data?.text?.trim() ?? '';
+      if (text.isEmpty) return;
+      if (!RegExp(_urlPattern, caseSensitive: false).hasMatch(text)) return;
+      // Only auto-fill if the field is still empty (don't clobber user input).
+      if (_urlController.text.isNotEmpty) return;
+      _urlController.text = text;
+      // Let the first frame render before fetching so the URL is visible.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _controller.progress.phase == DownloadPhase.idle) {
+          _onFetch();
+        }
+      });
+    } catch (_) {
+      // Clipboard access can be denied on some platforms — silently ignore.
+    }
   }
 
   /// Build the initial subtitle config off the user's saved defaults so
@@ -67,6 +102,17 @@ class _SingleScreenState extends State<SingleScreen> {
     }
   }
 
+  /// Called by [HomeScreen] when the user taps "Retry" on a history entry.
+  /// Fills the URL field and kicks off a metadata fetch automatically.
+  void prefillUrl(String url) {
+    _urlController.text = url;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && _controller.progress.phase == DownloadPhase.idle) {
+        _onFetch();
+      }
+    });
+  }
+
   @override
   void dispose() {
     _controller.removeListener(_syncFilenameField);
@@ -82,6 +128,7 @@ class _SingleScreenState extends State<SingleScreen> {
     final url = _urlController.text.trim();
     if (url.isEmpty) return;
     FocusScope.of(context).unfocus();
+    setState(() => _trimHasError = false);
     await _controller.fetchMetadata(url);
   }
 
@@ -105,6 +152,7 @@ class _SingleScreenState extends State<SingleScreen> {
   void _onReset() {
     _controller.reset();
     _urlController.clear();
+    setState(() => _trimHasError = false);
   }
 
   Future<void> _openFile(String path) async {
@@ -138,6 +186,11 @@ class _SingleScreenState extends State<SingleScreen> {
         final selectedOutput = _controller.selectedOutputFormat;
         final isFetching = progress.phase == DownloadPhase.fetchingMetadata;
         final isDownloading = progress.phase == DownloadPhase.downloading;
+        // Lock all options after a successful finish so the user can't
+        // accidentally change settings on a completed download. Paused,
+        // cancelled, and error states all leave options editable.
+        final isFinished = progress.phase == DownloadPhase.finished;
+        final isLocked = (isDownloading && !progress.paused) || isFinished;
 
         return SingleChildScrollView(
           padding: const EdgeInsets.all(20),
@@ -152,7 +205,7 @@ class _SingleScreenState extends State<SingleScreen> {
                   _UrlInputRow(
                     controller: _urlController,
                     onSubmitted: (_) => _onFetch(),
-                    enabled: !isFetching && !isDownloading,
+                    enabled: !isFetching && !isLocked,
                     onFetch: _onFetch,
                     isFetching: isFetching,
                   ),
@@ -163,7 +216,7 @@ class _SingleScreenState extends State<SingleScreen> {
                     QualityDropdown(
                       formats: metadata.formats,
                       selected: selected,
-                      enabled: !isDownloading,
+                      enabled: !isLocked,
                       onChanged: _controller.selectFormat,
                     ),
                     const SizedBox(height: 12),
@@ -174,24 +227,31 @@ class _SingleScreenState extends State<SingleScreen> {
                       // quality the user just picked. Switching quality
                       // re-renders the dropdown so the chip updates live.
                       sourceVideoBytes: selected?.fileSize,
+                      // Always pass the real audio stream size so audio
+                      // format rows show the accurate yt-dlp size rather
+                      // than a bitrate-based estimate.
+                      sourceAudioBytes: metadata.audioOnlyFormat?.fileSize,
                       videoDuration: metadata.duration,
-                      enabled: !isDownloading,
+                      enabled: !isLocked,
                       onChanged: _controller.selectOutputFormat,
                     ),
                     const SizedBox(height: 16),
                     _SliceAndSubtitlesSection(
-                      isDownloading: isDownloading,
+                      isDownloading: isLocked,
                       videoDuration: metadata.duration,
                       onTrimChanged: (start, end) =>
                           _controller.setTrim(start: start, end: end),
+                      onTrimValidityChanged: (hasError) =>
+                          setState(() => _trimHasError = hasError),
                       subtitles: _initialSubtitles(),
                       outputFormat: selectedOutput,
+                      metadata: metadata,
                       onSubtitlesChanged: _controller.setSubtitleSettings,
                     ),
                     const SizedBox(height: 12),
                     TextField(
                       controller: _filenameController,
-                      enabled: !isDownloading,
+                      enabled: !isLocked,
                       onChanged: (value) =>
                           _controller.setCustomFilename(value),
                       decoration: InputDecoration(
@@ -204,13 +264,36 @@ class _SingleScreenState extends State<SingleScreen> {
                     ),
                     const SizedBox(height: 16),
                     if (progress.phase == DownloadPhase.ready)
-                      Align(
-                        alignment: Alignment.centerLeft,
-                        child: FilledButton.icon(
-                          onPressed: selected == null ? null : _onDownload,
-                          icon: const Icon(Icons.download_rounded),
-                          label: const Text('Download'),
-                        ),
+                      Row(
+                        children: [
+                          FilledButton.icon(
+                            onPressed: (selected == null || _trimHasError)
+                                ? null
+                                : _onDownload,
+                            icon: const Icon(Icons.download_rounded),
+                            label: const Text('Download'),
+                          ),
+                          if (selected != null) ...[
+                            Builder(builder: (context) {
+                              final estimatedBytes = selectedOutput.estimateBytes(
+                                sourceVideoBytes: selected.fileSize,
+                                sourceAudioBytes: metadata?.audioOnlyFormat?.fileSize,
+                                duration: metadata?.duration,
+                              );
+                              if (estimatedBytes == null) return const SizedBox.shrink();
+                              return Row(children: [
+                                const SizedBox(width: 12),
+                                Text(
+                                  '~${formatBytes(estimatedBytes)}',
+                                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                                    fontWeight: FontWeight.w500,
+                                  ),
+                                ),
+                              ]);
+                            }),
+                          ],
+                        ],
                       ),
                   ],
                   const SizedBox(height: 16),
@@ -283,18 +366,22 @@ class _SliceAndSubtitlesSection extends StatelessWidget {
     required this.isDownloading,
     required this.videoDuration,
     required this.onTrimChanged,
+    this.onTrimValidityChanged,
     required this.subtitles,
     required this.outputFormat,
     required this.onSubtitlesChanged,
+    this.metadata,
   });
 
   final bool isDownloading;
   final Duration? videoDuration;
   final void Function(Duration?, Duration?) onTrimChanged;
+  final void Function(bool hasError)? onTrimValidityChanged;
   final SubtitleSettings subtitles;
   final dynamic outputFormat; // OutputFormat — kept dynamic to avoid an extra
   // import alias here; the SubtitleInput widget itself is strongly typed.
   final ValueChanged<SubtitleSettings> onSubtitlesChanged;
+  final dynamic metadata; // VideoMetadata?
 
   static const double _stackThreshold = 620;
 
@@ -307,12 +394,14 @@ class _SliceAndSubtitlesSection extends StatelessWidget {
           enabled: !isDownloading,
           videoDuration: videoDuration,
           onChanged: onTrimChanged,
+          onValidityChanged: onTrimValidityChanged,
         );
 
     Widget subs() => SubtitleInput(
           enabled: !isDownloading,
           value: subtitles,
           outputFormat: outputFormat,
+          metadata: metadata,
           onChanged: onSubtitlesChanged,
         );
 
@@ -347,15 +436,13 @@ class _SliceAndSubtitlesSection extends StatelessWidget {
                 ],
               );
             }
-            return IntrinsicHeight(
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Expanded(child: trim()),
-                  const SizedBox(width: 12),
-                  Expanded(child: subs()),
-                ],
-              ),
+            return Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(child: trim()),
+                const SizedBox(width: 12),
+                Expanded(child: subs()),
+              ],
             );
           },
         ),

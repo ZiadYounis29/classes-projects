@@ -58,6 +58,8 @@ class VideoMetadata {
     required this.duration,
     required this.thumbnailUrl,
     required this.formats,
+    this.availableSubtitleLangs = const [],
+    this.availableAutoCaptionLangs = const [],
   });
 
   /// The URL the user originally pasted (kept verbatim — yt-dlp may rewrite
@@ -78,6 +80,14 @@ class VideoMetadata {
   /// Curated list of qualities the user can pick from. Always contains at
   /// least one entry: a `'best'` selector that lets yt-dlp pick.
   final List<VideoFormat> formats;
+
+  /// Language codes for manually uploaded subtitles (from yt-dlp's
+  /// `subtitles` field), e.g. `['en', 'ar', 'es']`. Empty when none available.
+  final List<String> availableSubtitleLangs;
+
+  /// Language codes for auto-generated / auto-translated captions (from
+  /// yt-dlp's `automatic_captions` field). Empty when none available.
+  final List<String> availableAutoCaptionLangs;
 
   /// Build from the JSON object returned by `yt-dlp --dump-single-json`.
   ///
@@ -102,6 +112,25 @@ class VideoMetadata {
         (json['formats'] as List<dynamic>? ?? <dynamic>[]).cast<Map<String, dynamic>>();
     final formats = _buildQualityList(rawFormats);
 
+    // Parse manually-uploaded subtitle language codes.
+    final subtitlesMap = json['subtitles'] as Map<String, dynamic>?;
+    final availableSubtitleLangs = subtitlesMap != null
+        ? (subtitlesMap.keys.toList()..sort())
+        : <String>[];
+
+    // Parse auto-generated caption language codes. We only surface the
+    // '*-orig' track — this is YouTube's raw speech-recognition caption in
+    // the video's original spoken language (e.g. 'en-orig' for English,
+    // 'ar-orig' for Arabic, 'es-orig' for Spanish). All other keys are
+    // auto-translated variants which are not the original transcription.
+    final autoCaptionsMap = json['automatic_captions'] as Map<String, dynamic>?;
+    final availableAutoCaptionLangs = autoCaptionsMap != null
+        ? (autoCaptionsMap.keys
+            .where((k) => k.endsWith('-orig'))
+            .toList()
+              ..sort())
+        : <String>[];
+
     return VideoMetadata(
       url: originalUrl,
       title: title,
@@ -109,6 +138,8 @@ class VideoMetadata {
       duration: duration,
       thumbnailUrl: thumbnailUrl,
       formats: formats,
+      availableSubtitleLangs: availableSubtitleLangs,
+      availableAutoCaptionLangs: availableAutoCaptionLangs,
     );
   }
 
@@ -122,6 +153,14 @@ class VideoMetadata {
     // Curated list always starts with the recommended/best entry.
     return formats.first;
   }
+
+  /// The audio-only entry in the curated format list, if present.
+  /// Its [VideoFormat.fileSize] is the real yt-dlp stream size for the best
+  /// audio track — use this as [sourceAudioBytes] in [FormatDropdown] so
+  /// audio format rows always display the accurate size regardless of which
+  /// video quality is currently selected.
+  VideoFormat? get audioOnlyFormat =>
+      formats.where((f) => f.isAudioOnly).firstOrNull;
 }
 
 /// Curate yt-dlp's format list down to the entries that are useful as a
@@ -147,7 +186,8 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
   // height → biggest-known filesize at that height. Many videos report a
   // filesize for some formats and not others; we take the max so the rung
   // size reflects the highest-quality variant the user could actually pick.
-  final videoSizesByHeight = <int, int>{};
+  final videoSizesByHeight = <int, int>{};  // video-only streams
+  final muxedSizesByHeight = <int, int>{};  // muxed (audio+video) streams
   int? bestAudioSize;
 
   for (final f in rawFormats) {
@@ -166,37 +206,48 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
       if (bestAudioSize == null || bytes > bestAudioSize) {
         bestAudioSize = bytes;
       }
+    } else if (h != null && vcodec != 'none' && acodec != 'none') {
+      // Muxed stream — collect separately so we can use it as a per-rung
+      // fallback when no video-only stream exists at that height (e.g. 240p
+      // and 144p on YouTube which only ship as muxed).
+      final prev = muxedSizesByHeight[h];
+      if (prev == null || bytes > prev) muxedSizesByHeight[h] = bytes;
     }
-    // Muxed formats (both vcodec and acodec present) are skipped:
-    // using them would double-count audio when we add bestAudioSize below.
   }
 
-  // Fallback: if no video-only stream sizes were found (some platforms only
-  // report sizes for muxed formats), collect muxed sizes instead. In that
-  // case we do NOT add bestAudioSize on top — audio is already included.
-  final bool useMuxedFallback = videoSizesByHeight.isEmpty;
-  if (useMuxedFallback) {
-    for (final f in rawFormats) {
-      final h = (f['height'] as num?)?.round();
-      final size = (f['filesize'] as num?) ?? (f['filesize_approx'] as num?);
-      if (size == null || h == null) continue;
-      final acodec = f['acodec'] as String? ?? 'none';
-      final vcodec = f['vcodec'] as String? ?? 'none';
-      if (vcodec != 'none' && acodec != 'none') {
-        final bytes = size.round();
-        final prev = videoSizesByHeight[h];
-        if (prev == null || bytes > prev) videoSizesByHeight[h] = bytes;
-      }
-    }
+  // If absolutely no video-only streams were found (some platforms never
+  // separate streams), promote all muxed sizes into the primary map so the
+  // logic below has something to work with. In this mode we skip adding
+  // bestAudioSize because audio is already baked into the muxed size.
+  final bool allMuxed = videoSizesByHeight.isEmpty;
+  if (allMuxed) {
+    muxedSizesByHeight.forEach((h, s) => videoSizesByHeight[h] = s);
   }
 
   final availableHeights = videoSizesByHeight.keys.toList()..sort();
-  final hasAnyHeight = availableHeights.isNotEmpty;
-  final topHeight = hasAnyHeight ? availableHeights.last : null;
+  // Heights that have muxed data but no video-only data — used as a
+  // per-rung fallback inside sizeForCeiling.
+  final muxedOnlyHeights = muxedSizesByHeight.keys
+      .where((h) => !videoSizesByHeight.containsKey(h))
+      .toList()
+        ..sort();
+  final allKnownHeights = {
+    ...availableHeights,
+    ...muxedOnlyHeights,
+  }.toList()..sort();
 
-  /// Best video size at or below [ceiling] plus audio (unless muxed fallback).
-  /// Returns null when nothing is known so the UI hides the size chip.
+  final hasAnyHeight = allKnownHeights.isNotEmpty;
+  final topHeight = hasAnyHeight ? allKnownHeights.last : null;
+
+  /// Best estimated size for a download capped at [ceiling] pixels tall.
+  ///
+  /// Priority:
+  ///   1. Largest video-only stream at or below ceiling + bestAudioSize.
+  ///   2. If no video-only stream exists at or below ceiling, use the largest
+  ///      muxed stream at or below ceiling (audio already included).
+  ///   3. Return null when no size data is available at all.
   int? sizeForCeiling(int? ceiling) {
+    // ── Pass 1: video-only streams ──────────────────────────────────────
     int? video;
     for (final h in availableHeights) {
       if (ceiling != null && h > ceiling) continue;
@@ -204,10 +255,26 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
       if (s == null) continue;
       if (video == null || s > video) video = s;
     }
-    if (video == null && bestAudioSize == null) return null;
-    // When using muxed sizes the audio is already baked in — don't add it again.
-    final audioAdd = useMuxedFallback ? 0 : (bestAudioSize ?? 0);
-    return (video ?? 0) + audioAdd;
+    if (video != null) {
+      // When the primary map was built from muxed data (allMuxed), audio is
+      // already included — do not add bestAudioSize again.
+      final audioAdd = allMuxed ? 0 : (bestAudioSize ?? 0);
+      return video + audioAdd;
+    }
+
+    // ── Pass 2: muxed-only fallback (e.g. 240p / 144p on YouTube) ──────
+    int? muxed;
+    for (final h in muxedOnlyHeights) {
+      if (ceiling != null && h > ceiling) continue;
+      final s = muxedSizesByHeight[h];
+      if (s == null) continue;
+      if (muxed == null || s > muxed) muxed = s;
+    }
+    if (muxed != null) return muxed; // audio already included in muxed size
+
+    // ── Pass 3: audio only (no video size known at all) ─────────────────
+    if (bestAudioSize != null) return bestAudioSize;
+    return null;
   }
 
   final out = <VideoFormat>[
@@ -225,7 +292,7 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
   // Common resolution rungs. Only show ones the source actually has.
   const ladder = <int>[2160, 1440, 1080, 720, 480, 360, 240, 144];
   for (final h in ladder) {
-    final hasIt = availableHeights.any((avail) => avail >= h);
+    final hasIt = allKnownHeights.any((avail) => avail >= h);
     if (!hasIt) continue;
     // For each rung, ask yt-dlp to mux best video <= h with best audio.
     out.add(
@@ -244,7 +311,7 @@ List<VideoFormat> _buildQualityList(List<Map<String, dynamic>> rawFormats) {
   out.add(
     VideoFormat(
       id: 'ba/b',
-      label: 'Audio only (best)',
+      label: 'Audio only',
       ext: 'm4a',
       height: null,
       fileSize: bestAudioSize,

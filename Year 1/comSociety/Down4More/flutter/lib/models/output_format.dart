@@ -51,14 +51,20 @@ class OutputFormat {
   /// currently-selected quality. `duration` is `VideoMetadata.duration`.
   int? estimateBytes({
     int? sourceVideoBytes,
+    int? sourceAudioBytes,
     Duration? duration,
   }) {
     if (isVideo) {
       if (sourceVideoBytes == null || videoSizeMultiplier == null) return null;
       return (sourceVideoBytes * videoSizeMultiplier!).round();
     }
-    // Audio: bitrate × duration. We never use the source video size here
-    // because picking a 1080p video doesn't change how big the MP3 will be.
+    // Audio: M4A is a direct remux of the AAC stream yt-dlp downloads — no
+    // re-encoding happens, so the output file size equals the raw stream size
+    // that yt-dlp reported. Use sourceAudioBytes directly for M4A when available.
+    // All other audio formats (MP3, FLAC, WAV, Opus, OGG) are transcodes whose
+    // output size depends on the encoder bitrate, not the source stream size,
+    // so they keep using the bitrate x duration formula.
+    if (ext == 'm4a' && sourceAudioBytes != null) return sourceAudioBytes;
     if (duration == null || audioBitrateKbps == null) return null;
     return (audioBitrateKbps! * 1000 * duration.inSeconds / 8).round();
   }

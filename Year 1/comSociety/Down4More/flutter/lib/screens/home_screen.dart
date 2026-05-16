@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 
+import '../services/download_history.dart';
 import '../settings/app_settings.dart';
 import '../theme/theme_controller.dart';
 import '../widgets/d4m_logo.dart';
 import 'batch_screen.dart';
 import 'files_screen.dart';
+import 'history_screen.dart';
 import 'playlist_screen.dart';
 import 'settings_screen.dart';
 import 'single_screen.dart';
@@ -17,10 +19,12 @@ class HomeScreen extends StatefulWidget {
     super.key,
     required this.themeController,
     required this.appSettings,
+    required this.history,
   });
 
   final ThemeController themeController;
   final AppSettings appSettings;
+  final DownloadHistory history;
 
   @override
   State<HomeScreen> createState() => _HomeScreenState();
@@ -29,14 +33,22 @@ class HomeScreen extends StatefulWidget {
 class _HomeScreenState extends State<HomeScreen> {
   int _selectedIndex = 0;
   late final List<Widget> _screens;
+  final _singleKey = GlobalKey<SingleScreenState>();
 
   @override
   void initState() {
     super.initState();
     _screens = [
-      SingleScreen(appSettings: widget.appSettings),
-      PlaylistScreen(appSettings: widget.appSettings),
-      BatchScreen(appSettings: widget.appSettings),
+      SingleScreen(key: _singleKey, appSettings: widget.appSettings, history: widget.history),
+      PlaylistScreen(appSettings: widget.appSettings, history: widget.history),
+      BatchScreen(appSettings: widget.appSettings, history: widget.history),
+      HistoryScreen(
+        history: widget.history,
+        onRetryUrl: (url) {
+          _singleKey.currentState?.prefillUrl(url);
+          setState(() => _selectedIndex = 0);
+        },
+      ),
       FilesScreen(appSettings: widget.appSettings),
       SettingsScreen(
         themeController: widget.themeController,
@@ -46,11 +58,12 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   static const List<_NavDestination> _destinations = [
-    _NavDestination(Icons.link_outlined, Icons.link, 'Single'),
-    _NavDestination(Icons.list_alt_outlined, Icons.list_alt, 'Playlist'),
-    _NavDestination(Icons.dynamic_feed_outlined, Icons.dynamic_feed, 'Batch'),
-    _NavDestination(Icons.folder_open_outlined, Icons.folder_open, 'My Files'),
-    _NavDestination(Icons.settings_outlined, Icons.settings, 'Settings'),
+    _NavDestination(Icons.link_outlined,           Icons.link,              'Single'),
+    _NavDestination(Icons.list_alt_outlined,        Icons.list_alt,          'Playlist'),
+    _NavDestination(Icons.dynamic_feed_outlined,    Icons.dynamic_feed,      'Batch'),
+    _NavDestination(Icons.history_outlined,         Icons.history,           'History'),
+    _NavDestination(Icons.folder_open_outlined,     Icons.folder_open,       'My Files'),
+    _NavDestination(Icons.settings_outlined,        Icons.settings,          'Settings'),
   ];
 
   @override

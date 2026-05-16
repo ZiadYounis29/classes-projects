@@ -70,10 +70,18 @@ class QueueItemRow extends StatelessWidget {
             // each row independently. Per-item subtitle controls are
             // appended underneath in per-item mode so the user can pin a
             // different language/format/embed combo for each video.
+            //
+            // Controls are hidden once the queue is running — idle items
+            // that are simply waiting for a concurrency slot have already
+            // been committed and must not have their settings changed.
             if (item.metadata != null &&
                 item.previewError == null &&
+                !queue.isRunning &&
                 progress.phase != DownloadPhase.downloading &&
-                progress.phase != DownloadPhase.trimming) ...[
+                progress.phase != DownloadPhase.trimming &&
+                progress.phase != DownloadPhase.finished &&
+                progress.phase != DownloadPhase.error &&
+                progress.phase != DownloadPhase.cancelled) ...[
               const SizedBox(height: 6),
               if (queue.qualityMode == QualityMode.perItem) ...[
                 _buildPerItemControls(context),
@@ -313,6 +321,7 @@ class QueueItemRow extends StatelessWidget {
     return SubtitleInput(
       value: effective,
       outputFormat: selectedOutput,
+      metadata: item.metadata,
       compact: true,
       onChanged: (s) => queue.setItemSubtitleSettings(item, s),
     );
@@ -354,12 +363,30 @@ class QueueItemRow extends StatelessWidget {
     final isFinished = progress.phase == DownloadPhase.finished;
     final isFailed = progress.phase == DownloadPhase.error ||
         progress.phase == DownloadPhase.cancelled;
+    // Pause only applies while actively downloading (not trimming — ffmpeg
+    // trim is fast and can't be meaningfully paused).
+    final canPause = progress.phase == DownloadPhase.downloading;
+    final isPaused = item.pauseRequested || (item.handle?.isPaused ?? false);
 
     return Wrap(
       spacing: 4,
       runSpacing: 0,
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
+        if (canPause)
+          TextButton.icon(
+            onPressed: () => isPaused
+                ? queue.resumeItem(item)
+                : queue.pauseItem(item),
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+            ),
+            icon: Icon(
+              isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+              size: 16,
+            ),
+            label: Text(isPaused ? 'Resume' : 'Pause'),
+          ),
         if (isActive)
           TextButton.icon(
             onPressed: () => queue.cancelItem(item),

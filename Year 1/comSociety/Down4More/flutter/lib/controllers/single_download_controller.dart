@@ -9,6 +9,8 @@ import '../models/download_progress.dart';
 import '../models/output_format.dart';
 import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
+import '../services/download_history.dart';
+import '../services/notification_service.dart';
 import '../services/ytdlp_service.dart';
 import '../settings/app_settings.dart';
 
@@ -23,13 +25,27 @@ class SingleDownloadController extends ChangeNotifier {
     YtDlpService? service,
     Future<String> Function()? defaultOutputDir,
     AppSettings? appSettings,
+    DownloadHistory? history,
   })  : _service = service ?? YtDlpService(),
         _defaultOutputDir = defaultOutputDir ?? _platformDownloadsDir,
-        _appSettings = appSettings;
+        _appSettings = appSettings,
+        _history = history {
+    // React immediately when the user flips the "append quality" toggle in
+    // Settings so the filename field updates without reopening the screen.
+    _appSettings?.addListener(_onSettingsChanged);
+  }
+
+  void _onSettingsChanged() {
+    if (!_filenameManuallyEdited && _metadata != null) {
+      _updateAutoFilename();
+      notifyListeners();
+    }
+  }
 
   final YtDlpService _service;
   final Future<String> Function() _defaultOutputDir;
   final AppSettings? _appSettings;
+  final DownloadHistory? _history;
 
   DownloadProgress _progress = DownloadProgress.idle;
   VideoMetadata? _metadata;
@@ -91,8 +107,8 @@ class SingleDownloadController extends ChangeNotifier {
       }
       // (If quality is video and format is already video, no snap needed —
       // _selectedOutputFormat already set from defaultOutputFormat above.)
-      _customFilename = m.title;
       _filenameManuallyEdited = false;
+      _updateAutoFilename();
       _progress = const DownloadProgress(phase: DownloadPhase.ready);
     } on YtDlpException catch (e) {
       _progress = DownloadProgress(
@@ -159,6 +175,10 @@ class SingleDownloadController extends ChangeNotifier {
               orElse: () => kDefaultVideoFormat,
             )
           : kDefaultVideoFormat;
+    }
+    // Keep the auto filename in sync with the new quality label.
+    if (!_filenameManuallyEdited && _metadata != null) {
+      _updateAutoFilename();
     }
     notifyListeners();
   }
@@ -229,13 +249,18 @@ class SingleDownloadController extends ChangeNotifier {
 
   void _updateAutoFilename() {
     final title = _metadata?.title ?? '';
+    final appendQuality = _appSettings?.appendQualityToFilename ?? false;
+    final qualitySuffix = (appendQuality && _selectedFormat != null)
+        ? ' [${_selectedFormat!.label}]'
+        : '';
+
     if (_trimStart != null || _trimEnd != null) {
       final startStr = _formatTrimLabel(_trimStart ?? Duration.zero);
       final endStr = _formatTrimLabel(
           _trimEnd ?? _metadata?.duration ?? Duration.zero);
-      _customFilename = '$title [$startStr-$endStr]';
+      _customFilename = '$title$qualitySuffix [$startStr-$endStr]';
     } else {
-      _customFilename = title;
+      _customFilename = '$title$qualitySuffix';
     }
   }
 
@@ -303,9 +328,51 @@ class SingleDownloadController extends ChangeNotifier {
               startDownload();
             }
           });
+        } else {
+          // Retries exhausted (or disabled) — log to history as failed.
+          if (_history != null) {
+            _history!.add(HistoryEntry(
+              id: '${DateTime.now().millisecondsSinceEpoch}_single',
+              title: _metadata?.title ?? '',
+              url: _metadata?.url ?? '',
+              outputPath: '',
+              finishedAt: DateTime.now(),
+              quality: _selectedFormat?.label ?? '',
+              outputExt: _selectedOutputFormat.ext,
+              status: DownloadStatus.failed,
+              errorMessage: event.errorMessage,
+            ));
+          }
+        }
+      } else if (event.phase == DownloadPhase.cancelled) {
+        if (_history != null) {
+          _history!.add(HistoryEntry(
+            id: '${DateTime.now().millisecondsSinceEpoch}_single',
+            title: _metadata?.title ?? '',
+            url: _metadata?.url ?? '',
+            outputPath: '',
+            finishedAt: DateTime.now(),
+            quality: _selectedFormat?.label ?? '',
+            outputExt: _selectedOutputFormat.ext,
+            status: DownloadStatus.cancelled,
+          ));
         }
       } else if (event.phase == DownloadPhase.finished) {
         _retryAttempt = 0;
+        // Fire-and-forget: OS notification + history log.
+        final title = _metadata?.title ?? '';
+        NotificationService.notifyFinished(title);
+        if (_history != null && event.outputPath != null) {
+          _history!.add(HistoryEntry(
+            id: '${DateTime.now().millisecondsSinceEpoch}_single',
+            title: title,
+            url: _metadata?.url ?? '',
+            outputPath: event.outputPath!,
+            finishedAt: DateTime.now(),
+            quality: _selectedFormat?.label ?? '',
+            outputExt: _selectedOutputFormat.ext,
+          ));
+        }
       }
     });
   }
@@ -355,6 +422,7 @@ class SingleDownloadController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _appSettings?.removeListener(_onSettingsChanged);
     _resetActiveDownload();
     super.dispose();
   }

@@ -46,21 +46,8 @@ class SettingsScreen extends StatelessWidget {
             ThemePicker(controller: themeController),
             const SizedBox(height: 32),
 
-            // ── Downloads ───────────────────────────────────────────────────
-            const _SectionHeader(icon: Icons.folder_outlined, title: 'Downloads'),
-            const SizedBox(height: 12),
-            _FolderPickerTile(appSettings: appSettings),
-            const SizedBox(height: 8),
-            _SwitchTile(
-              icon: Icons.cleaning_services_outlined,
-              title: 'Keep partial files on cancel',
-              subtitle: "Don't delete in-progress files when cancelling",
-              value: appSettings.keepPartial,
-              onChanged: appSettings.setKeepPartial,
-            ),
-            const SizedBox(height: 32),
-
             // ── Defaults ────────────────────────────────────────────────────
+            // Format, quality, and concurrency applied to new downloads.
             const _SectionHeader(icon: Icons.tune, title: 'Defaults'),
             const SizedBox(height: 12),
             _FormatTile(appSettings: appSettings),
@@ -92,6 +79,21 @@ class SettingsScreen extends StatelessWidget {
               max: 8,
               onChanged: appSettings.setConcurrency,
             ),
+            const SizedBox(height: 32),
+
+            // ── Downloads ───────────────────────────────────────────────────
+            // Folder location, file handling, output organisation, notifications.
+            const _SectionHeader(icon: Icons.folder_outlined, title: 'Downloads'),
+            const SizedBox(height: 12),
+            _FolderPickerTile(appSettings: appSettings),
+            const SizedBox(height: 8),
+            _SwitchTile(
+              icon: Icons.cleaning_services_outlined,
+              title: 'Keep partial files on cancel',
+              subtitle: "Don't delete in-progress files when cancelling",
+              value: appSettings.keepPartial,
+              onChanged: appSettings.setKeepPartial,
+            ),
             const SizedBox(height: 8),
             _SwitchTile(
               icon: Icons.folder_copy_outlined,
@@ -107,6 +109,50 @@ class SettingsScreen extends StatelessWidget {
               subtitle: 'Create a named subfolder for each playlist by default',
               value: appSettings.playlistFolder,
               onChanged: appSettings.setPlaylistFolder,
+            ),
+            const SizedBox(height: 8),
+            _SwitchTile(
+              icon: Icons.label_outline,
+              title: 'Append quality to filename',
+              subtitle:
+                  'Adds the quality label to the filename (e.g. "Title [1080p]"). '
+                  'In Single mode, updates the name field live as you change quality.',
+              value: appSettings.appendQualityToFilename,
+              onChanged: appSettings.setAppendQualityToFilename,
+            ),
+            const SizedBox(height: 8),
+            _SwitchTile(
+              icon: Icons.notifications_active_outlined,
+              title: 'Desktop notifications',
+              subtitle: 'Show an OS notification when a download completes',
+              value: appSettings.notificationsEnabled,
+              onChanged: appSettings.setNotificationsEnabled,
+            ),
+            const SizedBox(height: 32),
+
+            // ── Queue behaviour ──────────────────────────────────────────────
+            // Controls what happens when items are paused or the queue shifts.
+            const _SectionHeader(
+                icon: Icons.queue_outlined, title: 'Queue behaviour'),
+            const SizedBox(height: 12),
+            _SwitchTile(
+              icon: Icons.skip_next_outlined,
+              title: 'Single pause: start next in queue',
+              subtitle:
+                  'When you pause a single item, automatically start the '
+                  'next idle item in the queue to fill the freed slot.',
+              value: appSettings.pauseSingleStartsNext,
+              onChanged: appSettings.setPauseSingleStartsNext,
+            ),
+            const SizedBox(height: 8),
+            _SwitchTile(
+              icon: Icons.playlist_play_outlined,
+              title: 'Pause all: start next in queue',
+              subtitle:
+                  'When you pause all items, automatically start the next '
+                  'idle items to fill the freed slots.',
+              value: appSettings.pauseAllStartsNext,
+              onChanged: appSettings.setPauseAllStartsNext,
             ),
             const SizedBox(height: 32),
 
@@ -133,18 +179,25 @@ class SettingsScreen extends StatelessWidget {
               ],
               onChanged: appSettings.setDefaultSubtitleFormat,
             ),
+            const SizedBox(height: 8),
+            _SwitchTile(
+              icon: Icons.verified_outlined,
+              title: 'Prefer manual captions over auto',
+              subtitle:
+                  'In Playlist & Batch: when you select auto-captions but a '
+                  'manual track exists for the same language, use the manual '
+                  'version instead — it is usually more accurate.',
+              value: appSettings.preferManualOverAuto,
+              onChanged: appSettings.setPreferManualOverAuto,
+            ),
             const SizedBox(height: 32),
 
             // ── Network ─────────────────────────────────────────────────────
+            // Speed cap and automatic retry on failure.
             const _SectionHeader(icon: Icons.cloud_outlined, title: 'Network'),
             const SizedBox(height: 12),
             _SpeedLimitTile(appSettings: appSettings),
-            const SizedBox(height: 32),
-
-            // ── Auto-retry ──────────────────────────────────────────────────
-            const _SectionHeader(
-                icon: Icons.replay_circle_filled_outlined, title: 'Auto-retry'),
-            const SizedBox(height: 12),
+            const SizedBox(height: 8),
             _StepperTile(
               icon: Icons.refresh_outlined,
               title: 'Max retries on failure',

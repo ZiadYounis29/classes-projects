@@ -13,9 +13,12 @@ import '../models/output_format.dart';
 /// widget never shows an inconsistent state.
 ///
 /// [sourceVideoBytes] is the [VideoFormat.fileSize] of the currently-selected
-/// quality. [videoDuration] is the source video's runtime. Both are passed
-/// through to [OutputFormat.estimateBytes] so each row can display an
-/// approximate output size that updates live as the quality changes.
+/// quality. [sourceAudioBytes] is the [VideoFormat.fileSize] of the best
+/// audio-only format (always passed regardless of quality selection, so audio
+/// format rows show the real yt-dlp stream size rather than a bitrate estimate).
+/// [videoDuration] is the source video's runtime. All are passed through to
+/// [OutputFormat.estimateBytes] so each row can display an approximate output
+/// size that updates live as the quality changes.
 class FormatDropdown extends StatelessWidget {
   const FormatDropdown({
     super.key,
@@ -23,6 +26,7 @@ class FormatDropdown extends StatelessWidget {
     required this.isAudioOnly,
     required this.onChanged,
     this.sourceVideoBytes,
+    this.sourceAudioBytes,
     this.videoDuration,
     this.enabled = true,
   });
@@ -31,6 +35,7 @@ class FormatDropdown extends StatelessWidget {
   final bool isAudioOnly;
   final ValueChanged<OutputFormat> onChanged;
   final int? sourceVideoBytes;
+  final int? sourceAudioBytes;
   final Duration? videoDuration;
   final bool enabled;
 
@@ -63,6 +68,7 @@ class FormatDropdown extends StatelessWidget {
               format: f,
               estimateBytes: f.estimateBytes(
                 sourceVideoBytes: sourceVideoBytes,
+                sourceAudioBytes: sourceAudioBytes,
                 duration: videoDuration,
               ),
             ),

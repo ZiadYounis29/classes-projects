@@ -4,9 +4,56 @@ import '../controllers/download_queue_controller.dart';
 import '../controllers/playlist_controller.dart';
 import '../models/output_format.dart';
 import '../models/subtitle_settings.dart';
+import '../models/video_metadata.dart';
+import '../services/download_history.dart';
 import '../settings/app_settings.dart';
 import '../widgets/queue_item_row.dart';
+import '../widgets/format_dropdown.dart' show formatBytes;
 import '../widgets/subtitle_input.dart';
+
+/// Builds a synthetic [VideoMetadata] that merges the subtitle availability
+/// of all fetched queue items. Used to populate the global [SubtitleInput]
+/// with real track information.
+///
+/// Manual subtitle langs are the union across all items.
+///
+/// For auto-captions we expose a single synthetic sentinel entry
+/// [kAutoOrigSentinel] ('auto-orig') when *any* item has an *-orig
+/// auto-caption track. This sentinel is language-agnostic — at download
+/// time [DownloadQueueController] resolves it per-item to the actual
+/// *-orig lang code that item carries (e.g. 'en-orig', 'ar-orig').
+/// Items that have no auto-caption track are silently skipped.
+VideoMetadata? _mergedSubtitleMetadata(List<QueueItem> items) {
+  final fetched = items.where((i) => i.metadata != null).toList();
+  if (fetched.isEmpty) return null;
+
+  final subtitleLangs = <String>{};
+  bool anyHasOrigAuto = false;
+
+  for (final item in fetched) {
+    final m = item.metadata!;
+    subtitleLangs.addAll(m.availableSubtitleLangs);
+    if (m.availableAutoCaptionLangs.any((k) => k.endsWith('-orig'))) {
+      anyHasOrigAuto = true;
+    }
+  }
+
+  // Expose the sentinel only when at least one item actually has an -orig
+  // track. The SubtitleInput widget treats it as a normal auto-caption code
+  // and displays it as "Original language (auto)" via _autoLangLabel.
+  final autoCaptionLangs = anyHasOrigAuto ? [kAutoOrigSentinel] : <String>[];
+
+  return VideoMetadata(
+    url: '',
+    title: '',
+    uploader: '',
+    duration: null,
+    thumbnailUrl: null,
+    formats: const [],
+    availableSubtitleLangs: (subtitleLangs.toList()..sort()),
+    availableAutoCaptionLangs: autoCaptionLangs,
+  );
+}
 
 /// Playlist download screen.
 ///
@@ -24,8 +71,9 @@ import '../widgets/subtitle_input.dart';
 ///   3. **Running** (`_started == true`): per-item progress rows + global
 ///      cancel-all / retry-failed / new-playlist controls.
 class PlaylistScreen extends StatefulWidget {
-  const PlaylistScreen({super.key, required this.appSettings});
+  const PlaylistScreen({super.key, required this.appSettings, this.history});
   final AppSettings appSettings;
+  final DownloadHistory? history;
 
   @override
   State<PlaylistScreen> createState() => _PlaylistScreenState();
@@ -45,6 +93,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
   /// True once [_onStartDownload] has been called and the queue is actively
   /// downloading. Hides the configure card and shows the running card.
   bool _started = false;
+
+  /// Merged subtitle metadata computed once after previewAll() completes.
+  /// Passed to the global SubtitleInput so it shows only real available tracks.
+  VideoMetadata? _mergedMeta;
 
   /// Whether to save downloads into a named subfolder (default: true for
   /// playlists per [AppSettings.playlistFolder]).
@@ -141,7 +193,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     if (entries.isEmpty) return;
 
     _queueCtrl?.dispose();
-    final q = DownloadQueueController(appSettings: widget.appSettings);
+    final q = DownloadQueueController(appSettings: widget.appSettings, history: widget.history);
     q.addEntries(entries);
     q.setGroupFolder(enabled: _groupFolderEnabled, name: _folderCtrl.text);
     // Seed the queue's global subtitle config from the user's saved
@@ -171,7 +223,10 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     );
     q.setGlobalOutputFormat(_globalOutput);
 
-    setState(() => _previewing = false);
+    setState(() {
+      _previewing = false;
+      _mergedMeta = _mergedSubtitleMetadata(q.items);
+    });
   }
 
   void _onBackToSelection() {
@@ -179,6 +234,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     _queueCtrl = null;
     _started = false;
     _previewing = false;
+    _mergedMeta = null;
     setState(() {});
   }
 
@@ -205,6 +261,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     _queueCtrl = null;
     _started = false;
     _previewing = false;
+    _mergedMeta = null;
     _applySettingsDefaults();
     _urlCtrl.clear();
     _folderCtrl.clear();
@@ -503,6 +560,17 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
         .where((i) => i.metadata != null || i.previewError != null)
         .length;
 
+    final totalBytes = q.items.fold<int>(0, (sum, item) {
+      final fmt = item.selectedOutputFormat ?? _globalOutput;
+      final estimated = fmt.estimateBytes(
+        sourceVideoBytes: item.selectedFormat?.fileSize,
+        sourceAudioBytes: item.metadata?.audioOnlyFormat?.fileSize,
+        duration: item.metadata?.duration,
+      );
+      return sum + (estimated ?? 0);
+    });
+    final totalSizeLabel = totalBytes > 0 ? '~${formatBytes(totalBytes)}' : null;
+
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -601,6 +669,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                     SubtitleInput(
                       value: q.globalSubtitles,
                       outputFormat: _globalOutput,
+                      metadata: _mergedMeta,
                       onChanged: q.setGlobalSubtitles,
                     ),
                     const SizedBox(height: 12),
@@ -649,6 +718,16 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                   label: const Text('Back to selection'),
                 ),
                 const Spacer(),
+                if (totalSizeLabel != null) ...[
+                  Text(
+                    totalSizeLabel,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                ],
                 FilledButton.icon(
                   onPressed:
                       _previewing || total == 0 ? null : _onStartDownload,
@@ -734,12 +813,25 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
                       spacing: 8,
                       runSpacing: 8,
                       children: [
-                        if (q.isRunning)
+                        if (q.isRunning) ...[
+                          TextButton.icon(
+                            onPressed: () => q.allPaused
+                                ? q.resumeAll()
+                                : q.pauseAll(),
+                            icon: Icon(
+                              q.allPaused
+                                  ? Icons.play_arrow_rounded
+                                  : Icons.pause_rounded,
+                            ),
+                            label: Text(
+                                q.allPaused ? 'Resume all' : 'Pause all'),
+                          ),
                           TextButton.icon(
                             onPressed: () => q.cancelAll(),
                             icon: const Icon(Icons.close),
                             label: const Text('Cancel all'),
                           ),
+                        ],
                         if (!q.isRunning && errors > 0)
                           FilledButton.tonal(
                             onPressed: () => q.retryFailed(),

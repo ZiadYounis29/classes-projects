@@ -3,9 +3,56 @@ import 'package:flutter/material.dart';
 import '../controllers/download_queue_controller.dart';
 import '../models/output_format.dart';
 import '../models/subtitle_settings.dart';
+import '../models/video_metadata.dart';
+import '../services/download_history.dart';
 import '../settings/app_settings.dart';
 import '../widgets/queue_item_row.dart';
+import '../widgets/format_dropdown.dart' show formatBytes;
 import '../widgets/subtitle_input.dart';
+
+/// Builds a synthetic [VideoMetadata] that merges the subtitle availability
+/// of all fetched queue items. Used to populate the global [SubtitleInput]
+/// with real track information.
+///
+/// Manual subtitle langs are the union across all items.
+///
+/// For auto-captions we expose a single synthetic sentinel entry
+/// [kAutoOrigSentinel] ('auto-orig') when *any* item has an *-orig
+/// auto-caption track. This sentinel is language-agnostic — at download
+/// time [DownloadQueueController] resolves it per-item to the actual
+/// *-orig lang code that item carries (e.g. 'en-orig', 'ar-orig').
+/// Items that have no auto-caption track are silently skipped.
+VideoMetadata? _mergedSubtitleMetadata(List<QueueItem> items) {
+  final fetched = items.where((i) => i.metadata != null).toList();
+  if (fetched.isEmpty) return null;
+
+  final subtitleLangs = <String>{};
+  bool anyHasOrigAuto = false;
+
+  for (final item in fetched) {
+    final m = item.metadata!;
+    subtitleLangs.addAll(m.availableSubtitleLangs);
+    if (m.availableAutoCaptionLangs.any((k) => k.endsWith('-orig'))) {
+      anyHasOrigAuto = true;
+    }
+  }
+
+  // Expose the sentinel only when at least one item actually has an -orig
+  // track. The SubtitleInput widget treats it as a normal auto-caption code
+  // and displays it as "Original language (auto)" via _autoLangLabel.
+  final autoCaptionLangs = anyHasOrigAuto ? [kAutoOrigSentinel] : <String>[];
+
+  return VideoMetadata(
+    url: '',
+    title: '',
+    uploader: '',
+    duration: null,
+    thumbnailUrl: null,
+    formats: const [],
+    availableSubtitleLangs: (subtitleLangs.toList()..sort()),
+    availableAutoCaptionLangs: autoCaptionLangs,
+  );
+}
 
 /// Batch download screen.
 ///
@@ -15,8 +62,9 @@ import '../widgets/subtitle_input.dart';
 ///      group-folder, then start download.
 ///   3. Downloading / done with per-item speed/size/cancel/retry.
 class BatchScreen extends StatefulWidget {
-  const BatchScreen({super.key, required this.appSettings});
+  const BatchScreen({super.key, required this.appSettings, this.history});
   final AppSettings appSettings;
+  final DownloadHistory? history;
 
   @override
   State<BatchScreen> createState() => _BatchScreenState();
@@ -28,6 +76,7 @@ class _BatchScreenState extends State<BatchScreen> {
   DownloadQueueController? _queueCtrl;
   bool _previewing = false;
   bool _started = false;
+  VideoMetadata? _mergedMeta;
 
   OutputFormat _globalOutput = kDefaultVideoFormat;
 
@@ -102,7 +151,7 @@ class _BatchScreenState extends State<BatchScreen> {
     if (urls.isEmpty) return;
 
     _queueCtrl?.dispose();
-    final q = DownloadQueueController(appSettings: widget.appSettings);
+    final q = DownloadQueueController(appSettings: widget.appSettings, history: widget.history);
     q.addUrls(urls);
 
     _folderCtrl.text = 'Batch';
@@ -146,7 +195,10 @@ class _BatchScreenState extends State<BatchScreen> {
     );
     q.setGlobalOutputFormat(_globalOutput);
 
-    setState(() => _previewing = false);
+    setState(() {
+      _previewing = false;
+      _mergedMeta = _mergedSubtitleMetadata(q.items);
+    });
   }
 
   void _onStartDownload() {
@@ -173,6 +225,7 @@ class _BatchScreenState extends State<BatchScreen> {
     _queueCtrl = null;
     _started = false;
     _previewing = false;
+    _mergedMeta = null;
     _urlsCtrl.clear();
     _folderCtrl.clear();
     setState(() {});
@@ -183,6 +236,7 @@ class _BatchScreenState extends State<BatchScreen> {
     _queueCtrl = null;
     _started = false;
     _previewing = false;
+    _mergedMeta = null;
     setState(() {});
   }
 
@@ -269,6 +323,7 @@ class _BatchScreenState extends State<BatchScreen> {
           _ConfigureCard(
             queue: q,
             previewing: _previewing,
+            mergedMeta: _mergedMeta,
             folderCtrl: _folderCtrl,
             globalOutput: _globalOutput,
             globalQualityHeight: _globalQualityHeight,
@@ -386,16 +441,19 @@ class _QualityPresetRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final IconData icon;
+    if (preset.height == null) {
+      icon = Icons.star_outlined;
+    } else if (preset.height == -1) {
+      icon = Icons.audiotrack_outlined;
+    } else {
+      icon = Icons.videocam_outlined;
+    }
+
     return Row(
       children: [
-        if (preset.height != null) ...[
-          Icon(
-            preset.height == -1 ? Icons.audiotrack_outlined : Icons.videocam_outlined,
-            size: 16,
-            color: scheme.onSurfaceVariant,
-          ),
-          const SizedBox(width: 10),
-        ],
+        Icon(icon, size: 16, color: scheme.onSurfaceVariant),
+        const SizedBox(width: 10),
         Text(preset.label),
       ],
     );
@@ -541,6 +599,7 @@ class _ConfigureCard extends StatelessWidget {
   const _ConfigureCard({
     required this.queue,
     required this.previewing,
+    required this.mergedMeta,
     required this.folderCtrl,
     required this.globalOutput,
     required this.globalQualityHeight,
@@ -555,6 +614,7 @@ class _ConfigureCard extends StatelessWidget {
 
   final DownloadQueueController queue;
   final bool previewing;
+  final VideoMetadata? mergedMeta;
   final TextEditingController folderCtrl;
   final OutputFormat globalOutput;
   final int? globalQualityHeight;
@@ -574,6 +634,19 @@ class _ConfigureCard extends StatelessWidget {
     final previewed = queue.items
         .where((i) => i.metadata != null || i.previewError != null)
         .length;
+
+    // Sum estimated output size across all items, accounting for the output
+    // format (remux/transcode multiplier) not just the raw stream size.
+    final totalBytes = queue.items.fold<int>(0, (sum, item) {
+      final fmt = item.selectedOutputFormat ?? globalOutput;
+      final estimated = fmt.estimateBytes(
+        sourceVideoBytes: item.selectedFormat?.fileSize,
+        sourceAudioBytes: item.metadata?.audioOnlyFormat?.fileSize,
+        duration: item.metadata?.duration,
+      );
+      return sum + (estimated ?? 0);
+    });
+    final totalSizeLabel = totalBytes > 0 ? '~${formatBytes(totalBytes)}' : null;
 
     return Card(
       child: Padding(
@@ -645,6 +718,7 @@ class _ConfigureCard extends StatelessWidget {
                     SubtitleInput(
                       value: queue.globalSubtitles,
                       outputFormat: globalOutput,
+                      metadata: mergedMeta,
                       onChanged: onSubtitlesChanged,
                     ),
                     const SizedBox(height: 12),
@@ -698,6 +772,16 @@ class _ConfigureCard extends StatelessWidget {
                   label: const Text('Back to URLs'),
                 ),
                 const Spacer(),
+                if (totalSizeLabel != null) ...[
+                  Text(
+                    totalSizeLabel,
+                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                ],
                 FilledButton.icon(
                   onPressed:
                       previewing || total == 0 ? null : onStartDownload,
@@ -781,12 +865,24 @@ class _RunningCard extends StatelessWidget {
               spacing: 8,
               runSpacing: 8,
               children: [
-                if (queue.isRunning)
+                if (queue.isRunning) ...[
+                  TextButton.icon(
+                    onPressed: () => queue.allPaused
+                        ? queue.resumeAll()
+                        : queue.pauseAll(),
+                    icon: Icon(
+                      queue.allPaused
+                          ? Icons.play_arrow_rounded
+                          : Icons.pause_rounded,
+                    ),
+                    label: Text(queue.allPaused ? 'Resume all' : 'Pause all'),
+                  ),
                   TextButton.icon(
                     onPressed: () => queue.cancelAll(),
                     icon: const Icon(Icons.close),
                     label: const Text('Cancel all'),
                   ),
+                ],
                 if (!queue.isRunning && errors > 0)
                   FilledButton.tonal(
                     onPressed: () => queue.retryFailed(),

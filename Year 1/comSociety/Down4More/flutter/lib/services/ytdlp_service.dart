@@ -178,7 +178,7 @@ class YtDlpService {
     required VideoFormat format,
     required String outputDir,
     String outputExt = 'mp4',
-    String outputTemplate = '%(title).200B [%(id)s].%(ext)s',
+    String outputTemplate = '%(title).200B.%(ext)s',
     String? customFilename,
     Duration? trimStart,
     Duration? trimEnd,
@@ -225,18 +225,33 @@ class YtDlpService {
           ? 'srt'
           : subtitles.format.trim();
       final canEmbed = !isAudio && kEmbedSubsSupportedExts.contains(outputExt);
-      subtitleArgs = <String>[
-        '--write-subs',
-        if (subtitles.autoTranslate) '--write-auto-subs',
-        '--sub-langs', lang,
-        // --sub-format prefers a specific source format from the server,
-        // --convert-subs guarantees the on-disk extension matches no matter
-        // what yt-dlp downloaded. Pair them so e.g. picking "srt" works
-        // even when only VTT is available.
-        '--sub-format', '$fmt/best',
-        '--convert-subs', fmt,
-        if (subtitles.embed && canEmbed) '--embed-subs',
-      ];
+
+      if (subtitles.useAutoCaption) {
+        // Auto-caption track — use --write-auto-subs to fetch the track.
+        // When embedding, yt-dlp's --embed-subs pipeline only activates when
+        // --write-subs is also present; without it, --embed-subs silently does
+        // nothing and the auto-caption is never downloaded. So we pass both
+        // flags together when the user wants to embed.
+        subtitleArgs = <String>[
+          '--write-auto-subs',
+          if (subtitles.embed && canEmbed) '--write-subs',
+          '--sub-langs', lang,
+          '--sub-format', '$fmt/best',
+          '--convert-subs', fmt,
+          if (subtitles.embed && canEmbed) '--embed-subs',
+          '--sleep-subtitles', '1',
+        ];
+      } else {
+        // Manual subtitle track selected.
+        subtitleArgs = <String>[
+          '--write-subs',
+          '--sub-langs', lang,
+          '--sub-format', '$fmt/best',
+          '--convert-subs', fmt,
+          if (subtitles.embed && canEmbed) '--embed-subs',
+          '--sleep-subtitles', '1',
+        ];
+      }
     } else {
       subtitleArgs = const <String>[];
     }
@@ -245,6 +260,13 @@ class YtDlpService {
       '--newline',
       '--no-playlist',
       '--no-warnings',
+      '--no-cache-dir',
+      // When the user does NOT want partial files kept, tell yt-dlp to write
+      // directly to the final filename instead of a .part sidecar. That way
+      // our own _deleteTempFile cleanup reliably removes the file on cancel
+      // or error. When keepPartial IS true we omit this flag so yt-dlp's
+      // default behaviour (write .part, rename on completion) is preserved.
+      if (!keepPartial) '--no-part',
       '-f', format.id,
       if (isAudio) ...['-x', '--audio-format', ytdlpAudioFmt]
       else ...['--merge-output-format', outputExt],
@@ -281,6 +303,11 @@ class YtDlpService {
         if (progress == null) return;
         if (progress.outputPath != null) {
           state.outputPath = progress.outputPath;
+          state.writtenPaths.add(progress.outputPath!);
+        }
+        // Detect when yt-dlp starts merging the separate streams.
+        if (progress.message?.startsWith('Merging audio + video') == true) {
+          state.mergeStarted = true;
         }
         if (progress.percent != null) {
           state.lastPercent = progress.percent;
@@ -303,12 +330,21 @@ class YtDlpService {
         }
       });
 
-      // Give the handle a way to pause/resume the stdout subscription.
-      // Pausing the subscription stops us reading from the pipe; the OS
-      // buffer (~64 KB) fills up quickly and yt-dlp stalls by itself —
-      // no SIGSTOP/SIGCONT, works identically on Windows, Linux, Android.
-      state.pauseCallback  = () {
+      // Pause/resume via OS-level process suspension so yt-dlp genuinely
+      // stops downloading — not just stops printing progress.
+      //
+      // The stdout-backpressure trick (pausing the StreamSubscription so the
+      // OS pipe buffer fills) does NOT work for yt-dlp: Python buffers its
+      // own stdout independently of the OS pipe, and the network download
+      // runs in a separate thread that is unaffected by stdout blocking.
+      //
+      // Instead we use SIGSTOP/SIGCONT on POSIX and NtSuspendProcess on
+      // Windows. We also pause/resume the Dart stdout subscription so the
+      // progress bar freezes correctly in the UI and buffered lines emitted
+      // just before the signal are drained cleanly on resume.
+      state.pauseCallback = () async {
         stdoutSub.pause();
+        await _suspendProcess(process.pid);
         controller.add(DownloadProgress(
           phase: DownloadPhase.downloading,
           paused: true,
@@ -316,7 +352,8 @@ class YtDlpService {
           message: 'Paused',
         ));
       };
-      state.resumeCallback = () {
+      state.resumeCallback = () async {
+        await _resumeProcess(process.pid);
         stdoutSub.resume();
         controller.add(DownloadProgress(
           phase: DownloadPhase.downloading,
@@ -336,15 +373,29 @@ class YtDlpService {
       await stderrSub.cancel();
 
       if (state.cancelled) {
-        // Clean up any partial temp file, unless the user wants to keep it.
-        if (!keepPartial) _deleteTempFile(state.outputPath);
+        // On cancel we must clean up carefully:
+        //
+        // yt-dlp downloads video and audio as *separate* streams before
+        // merging them. If the user cancels during the audio download the
+        // video stream is already a complete, valid file on disk — but it has
+        // no audio. We must never leave that file visible as a finished MP4.
+        //
+        // • keepPartial == false  → delete every file that was written,
+        //   including the audio-less video stream, any .part sidecars, and
+        //   the not-yet-created merge output.
+        // • keepPartial == true   → keep the partial data on disk (the user
+        //   explicitly asked for this) but do NOT emit a finished event, so
+        //   the audio-less file is never shown as a completed download.
+        if (!keepPartial) {
+          _deleteAllWrittenFiles(state.writtenPaths);
+        }
         controller.add(const DownloadProgress(phase: DownloadPhase.cancelled));
         await controller.close();
         return;
       }
 
       if (code != 0) {
-        if (!keepPartial) _deleteTempFile(state.outputPath);
+        if (!keepPartial) _deleteAllWrittenFiles(state.writtenPaths);
         controller.add(
           DownloadProgress(
             phase: DownloadPhase.error,
@@ -402,7 +453,15 @@ class YtDlpService {
 
         final ffResult = await _runner('ffmpeg', ffmpegArgs);
 
-        // Delete the temp file regardless of ffmpeg outcome.
+        // Rename subtitle sidecar files to match the final trimmed name,
+        // then trim their content to the same time window as the video so
+        // the captions stay in sync with the shorter clip.
+        _renameTempSubtitleFiles(tempPath, outputDir, finalName);
+        _trimSubtitleFiles(
+          outputDir, finalName, trimStart ?? Duration.zero, trimEnd,
+        );
+
+        // Delete the temp video file regardless of ffmpeg outcome.
         _deleteTempFile(tempPath);
 
         if (state.cancelled) {
@@ -461,11 +520,11 @@ class YtDlpService {
       onCancel: () => state.cancelled = true,
       onPause:  () {
         state.paused = true;
-        state.pauseCallback?.call();
+        state.pauseCallback?.call(); // fire-and-forget async
       },
       onResume: () {
         state.paused = false;
-        state.resumeCallback?.call();
+        state.resumeCallback?.call(); // fire-and-forget async
       },
     );
   }
@@ -522,12 +581,213 @@ String _formatTrimRange(Duration d) {
 
 /// Best-effort temp file deletion. Swallows errors — if the file is already
 /// gone or locked we don't want to mask the real error.
+///
+/// Also removes the companion `.part` file that yt-dlp writes while a
+/// download is in progress, in case `--no-part` wasn't in effect or yt-dlp
+/// left a stale sidecar after an interrupted merge.
 void _deleteTempFile(String? path) {
   if (path == null) return;
+  for (final candidate in [path, '$path.part']) {
+    try {
+      final f = File(candidate);
+      if (f.existsSync()) f.deleteSync();
+    } catch (_) {}
+  }
+}
+
+/// Delete every file that yt-dlp reported writing during a cancelled or failed
+/// download.  This covers:
+///   • The video-stream partial file (written before the audio stream starts,
+///     looks like a valid MP4 but has no audio track).
+///   • The audio-stream partial file.
+///   • The merged output file (if the cancel arrived after merging began).
+///   • Any companion `.part` sidecars for each of the above.
+///
+/// Swallows errors — if a file is already gone we don't want to mask the real
+/// cancellation event.
+void _deleteAllWrittenFiles(Set<String> paths) {
+  for (final path in paths) {
+    _deleteTempFile(path);
+  }
+}
+
+/// After trimming, yt-dlp's `--write-subs` may have written sidecar files
+/// like `_d4m_temp_xxx.en.srt` next to the temp video. Rename them to
+/// match the final trimmed filename (e.g. `Title [01m00s-02m00s].en.srt`).
+/// Swallows errors so a missing subtitle never blocks the download.
+void _renameTempSubtitleFiles(
+    String tempVideoPath, String outputDir, String finalBaseName) {
   try {
-    final f = File(path);
-    if (f.existsSync()) f.deleteSync();
+    final tempBase = p.basenameWithoutExtension(tempVideoPath);
+    final dir = Directory(outputDir);
+    if (!dir.existsSync()) return;
+    for (final entity in dir.listSync()) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      // Subtitle sidecars follow the pattern: <tempBase>.<lang>.<subExt>
+      // e.g. _d4m_temp_1234.en.srt, _d4m_temp_1234.ar.vtt
+      if (name.startsWith(tempBase) && name != p.basename(tempVideoPath)) {
+        final suffix = name.substring(tempBase.length); // e.g. ".en.srt"
+        final newPath = p.join(outputDir, '$finalBaseName$suffix');
+        try {
+          entity.renameSync(newPath);
+        } catch (_) {}
+      }
+    }
   } catch (_) {}
+}
+
+/// Trim every subtitle sidecar that belongs to [finalBaseName] so only cues
+/// within [start]..[end] survive, with timestamps shifted back by [start].
+/// Supports SRT and VTT. Swallows all errors.
+void _trimSubtitleFiles(
+    String outputDir, String finalBaseName, Duration start, Duration? end) {
+  try {
+    final dir = Directory(outputDir);
+    if (!dir.existsSync()) return;
+    for (final entity in dir.listSync()) {
+      if (entity is! File) continue;
+      final name = p.basename(entity.path);
+      if (!name.startsWith(finalBaseName)) continue;
+      final ext = p.extension(name).toLowerCase();
+      if (ext != '.srt' && ext != '.vtt') continue;
+      try {
+        final content = entity.readAsStringSync();
+        final trimmed = ext == '.srt'
+            ? _trimSrt(content, start, end)
+            : _trimVtt(content, start, end);
+        entity.writeAsStringSync(trimmed);
+      } catch (_) {}
+    }
+  } catch (_) {}
+}
+
+/// Parse and trim an SRT subtitle string.
+String _trimSrt(String content, Duration start, Duration? end) {
+  final blocks = content.split(RegExp(r'\n\s*\n'));
+  final buf = StringBuffer();
+  int idx = 1;
+  for (final block in blocks) {
+    final lines = block.trim().split('\n');
+    if (lines.length < 3) continue;
+    // SRT timestamp line: 00:01:30,500 --> 00:01:35,000
+    final match = RegExp(
+      r'(\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}[,.]\d{3})',
+    ).firstMatch(lines[1]);
+    if (match == null) continue;
+    final cueStart = _parseSrtTs(match.group(1)!);
+    final cueEnd = _parseSrtTs(match.group(2)!);
+    if (cueStart == null || cueEnd == null) continue;
+    // Skip cues entirely outside the trim window.
+    if (cueEnd <= start) continue;
+    if (end != null && cueStart >= end) continue;
+    // Clamp and shift.
+    final newStart = (cueStart < start ? Duration.zero : cueStart - start);
+    final Duration newEnd;
+    if (end != null && cueEnd > end) {
+      newEnd = end - start;
+    } else {
+      newEnd = cueEnd - start;
+    }
+    final text = lines.sublist(2).join('\n');
+    buf.writeln(idx);
+    buf.writeln('${_toSrtTs(newStart)} --> ${_toSrtTs(newEnd)}');
+    buf.writeln(text);
+    buf.writeln();
+    idx++;
+  }
+  return buf.toString();
+}
+
+/// Parse and trim a WebVTT subtitle string.
+String _trimVtt(String content, Duration start, Duration? end) {
+  final lines = content.split('\n');
+  final buf = StringBuffer();
+  buf.writeln('WEBVTT');
+  buf.writeln();
+  int i = 0;
+  // Skip header lines.
+  while (i < lines.length && !lines[i].contains('-->')) {
+    i++;
+  }
+  while (i < lines.length) {
+    final tsMatch = RegExp(
+      r'(\d{2}:\d{2}:\d{2}\.\d{3})\s*-->\s*(\d{2}:\d{2}:\d{2}\.\d{3})',
+    ).firstMatch(lines[i]);
+    if (tsMatch == null) {
+      i++;
+      continue;
+    }
+    final cueStart = _parseVttTs(tsMatch.group(1)!);
+    final cueEnd = _parseVttTs(tsMatch.group(2)!);
+    i++;
+    if (cueStart == null || cueEnd == null) continue;
+    // Collect cue text.
+    final textLines = <String>[];
+    while (i < lines.length && lines[i].trim().isNotEmpty) {
+      textLines.add(lines[i]);
+      i++;
+    }
+    // Skip blank separator lines.
+    while (i < lines.length && lines[i].trim().isEmpty) {
+      i++;
+    }
+    if (cueEnd <= start) continue;
+    if (end != null && cueStart >= end) continue;
+    final newStart = (cueStart < start ? Duration.zero : cueStart - start);
+    final Duration newEnd;
+    if (end != null && cueEnd > end) {
+      newEnd = end - start;
+    } else {
+      newEnd = cueEnd - start;
+    }
+    buf.writeln('${_toVttTs(newStart)} --> ${_toVttTs(newEnd)}');
+    for (final l in textLines) {
+      buf.writeln(l);
+    }
+    buf.writeln();
+  }
+  return buf.toString();
+}
+
+Duration? _parseSrtTs(String s) {
+  // 00:01:30,500
+  final m = RegExp(r'(\d{2}):(\d{2}):(\d{2})[,.](\d{3})').firstMatch(s);
+  if (m == null) return null;
+  return Duration(
+    hours: int.parse(m.group(1)!),
+    minutes: int.parse(m.group(2)!),
+    seconds: int.parse(m.group(3)!),
+    milliseconds: int.parse(m.group(4)!),
+  );
+}
+
+Duration? _parseVttTs(String s) {
+  // 00:01:30.500
+  final m = RegExp(r'(\d{2}):(\d{2}):(\d{2})\.(\d{3})').firstMatch(s);
+  if (m == null) return null;
+  return Duration(
+    hours: int.parse(m.group(1)!),
+    minutes: int.parse(m.group(2)!),
+    seconds: int.parse(m.group(3)!),
+    milliseconds: int.parse(m.group(4)!),
+  );
+}
+
+String _toSrtTs(Duration d) {
+  final h = d.inHours.toString().padLeft(2, '0');
+  final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  final ms = d.inMilliseconds.remainder(1000).toString().padLeft(3, '0');
+  return '$h:$m:$s,$ms';
+}
+
+String _toVttTs(Duration d) {
+  final h = d.inHours.toString().padLeft(2, '0');
+  final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  final ms = d.inMilliseconds.remainder(1000).toString().padLeft(3, '0');
+  return '$h:$m:$s.$ms';
 }
 
 
@@ -539,9 +799,21 @@ class _DownloadState {
   String? outputPath;
   double? lastPercent;
 
+  /// Every file path that yt-dlp has reported writing so far (Destination,
+  /// Merger lines). Used to clean up all partial files on cancel/error,
+  /// including the audio-less video stream that yt-dlp saves before the
+  /// audio stream when downloading a merged format.
+  final Set<String> writtenPaths = {};
+
+  /// True once yt-dlp prints a [Merger] line, meaning the separate video
+  /// and audio streams have both been downloaded and the merge has started.
+  /// Used so that on cancel we know whether intermediate stream files are
+  /// still present on disk.
+  bool mergeStarted = false;
+
   /// Set by [YtDlpService.download] once the stdout subscription exists.
-  void Function()? pauseCallback;
-  void Function()? resumeCallback;
+  Future<void> Function()? pauseCallback;
+  Future<void> Function()? resumeCallback;
 }
 
 /// Handle returned from [YtDlpService.download]. Lets the controller listen
@@ -557,12 +829,7 @@ class DownloadHandle {
         _onPause  = onPause,
         _onResume = onResume;
 
-  /// One [DownloadProgress] per stdout line + one terminal phase event
-  /// (finished / error / cancelled). Closes when the subprocess exits.
   final Stream<DownloadProgress> stream;
-
-  /// Completes once the underlying [Process] is actually started. If yt-dlp
-  /// is missing on PATH, completes with an error instead.
   final Future<Process> processFuture;
 
   final void Function() _onCancel;
@@ -574,29 +841,39 @@ class DownloadHandle {
   bool get isCancelled => _cancelled;
   bool get isPaused    => _paused;
 
-  /// Suspend the stdout read loop so yt-dlp stalls naturally.
+  /// Suspend the yt-dlp process at the OS level so it genuinely stops
+  /// downloading. Sends SIGSTOP on POSIX, suspends all threads on Windows.
   void pause() {
     if (_cancelled || _paused) return;
     _paused = true;
     _onPause();
   }
 
-  /// Resume reading stdout — yt-dlp resumes downloading immediately.
+  /// Resume the suspended yt-dlp process.
   void resume() {
     if (_cancelled || !_paused) return;
     _paused = false;
     _onResume();
   }
 
-  /// Send SIGTERM (or kill on Windows) to the running yt-dlp process. The
-  /// stream will then emit a [DownloadPhase.cancelled] event and close.
+  /// Send SIGTERM to terminate the yt-dlp process.
+  /// If the process is suspended (SIGSTOP / NtSuspendProcess), we must
+  /// resume it first — a stopped process cannot be killed with SIGTERM on
+  /// POSIX (it stays stopped until continued). We resume then kill.
   Future<void> cancel() async {
     if (_cancelled) return;
     _cancelled = true;
-    // If paused, resume the subscription first so the process exit is read.
     if (_paused) {
       _paused = false;
-      _onResume();
+      // Resume the process before killing so it can handle the signal.
+      // We call the raw _resumeProcess directly (bypassing the stream
+      // subscription resume) because we are about to tear it down anyway.
+      try {
+        final p = await processFuture;
+        if (!Platform.isWindows) {
+          Process.killPid(p.pid, ProcessSignal.sigcont);
+        }
+      } catch (_) {}
     }
     _onCancel();
     try {
@@ -605,6 +882,51 @@ class DownloadHandle {
     } catch (_) {
       // Process never started; nothing to kill.
     }
+  }
+}
+
+/// Suspend a process at the OS level so it genuinely stops consuming network.
+/// On POSIX sends SIGSTOP; on Windows P/Invokes NtSuspendProcess via PowerShell.
+Future<bool> _suspendProcess(int pid) async {
+  try {
+    if (Platform.isWindows) {
+      final script =
+          r'$sig=@"' '\n'
+          r'[DllImport("ntdll.dll")] public static extern int NtSuspendProcess(IntPtr h);' '\n'
+          r'"@' '\n'
+          r'$t=Add-Type -MemberDefinition $sig -Name NT -Namespace W -PassThru;' '\n'
+          r'$h=(Get-Process -Id ' + pid.toString() + r').Handle;' '\n'
+          r'$t::NtSuspendProcess($h)';
+      final result = await Process.run(
+          'powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
+      return result.exitCode == 0;
+    } else {
+      return Process.killPid(pid, ProcessSignal.sigstop);
+    }
+  } catch (_) {
+    return false;
+  }
+}
+
+/// Resume a process suspended with [_suspendProcess].
+Future<bool> _resumeProcess(int pid) async {
+  try {
+    if (Platform.isWindows) {
+      final script =
+          r'$sig=@"' '\n'
+          r'[DllImport("ntdll.dll")] public static extern int NtResumeProcess(IntPtr h);' '\n'
+          r'"@' '\n'
+          r'$t=Add-Type -MemberDefinition $sig -Name NTR -Namespace W -PassThru;' '\n'
+          r'$h=(Get-Process -Id ' + pid.toString() + r').Handle;' '\n'
+          r'$t::NtResumeProcess($h)';
+      final result = await Process.run(
+          'powershell', ['-NoProfile', '-NonInteractive', '-Command', script]);
+      return result.exitCode == 0;
+    } else {
+      return Process.killPid(pid, ProcessSignal.sigcont);
+    }
+  } catch (_) {
+    return false;
   }
 }
 

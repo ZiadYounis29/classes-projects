@@ -28,6 +28,11 @@ class AppSettings extends ChangeNotifier {
   static const _kPlaylistFolder = 'd4m.settings.playlistFolder';
   static const _kDefaultSubtitleLang   = 'd4m.settings.defaultSubtitleLang';
   static const _kDefaultSubtitleFormat = 'd4m.settings.defaultSubtitleFormat';
+  static const _kAppendQualityToFilename = 'd4m.settings.appendQualityToFilename';
+  static const _kPreferManualOverAuto   = 'd4m.settings.preferManualOverAuto';
+  static const _kPauseSingleStartsNext  = 'd4m.settings.pauseSingleStartsNext';
+  static const _kPauseAllStartsNext     = 'd4m.settings.pauseAllStartsNext';
+  static const _kNotificationsEnabled   = 'd4m.settings.notificationsEnabled';
 
   SharedPreferences? _prefs;
 
@@ -47,6 +52,11 @@ class AppSettings extends ChangeNotifier {
   bool   _playlistFolder = true;    // default: save playlist downloads into a subfolder
   String _defaultSubtitleLang   = 'en';   // IETF tag, applied when subs are enabled
   String _defaultSubtitleFormat = 'srt';  // srt / vtt / ass / lrc
+  bool   _appendQualityToFilename = false; // append quality label to output filenames
+  bool   _preferManualOverAuto   = false; // upgrade auto-caption to manual when same lang exists
+  bool   _pauseSingleStartsNext  = false; // when pausing a single item, auto-start the next idle item
+  bool   _pauseAllStartsNext     = false; // when pausing all items, auto-start the next idle item
+  bool   _notificationsEnabled   = true;  // show OS desktop notifications on download complete
 
   // ── Public getters ─────────────────────────────────────────────────────────
   String get downloadDir    => _downloadDir;
@@ -62,6 +72,11 @@ class AppSettings extends ChangeNotifier {
   bool   get playlistFolder => _playlistFolder;
   String get defaultSubtitleLang   => _defaultSubtitleLang;
   String get defaultSubtitleFormat => _defaultSubtitleFormat;
+  bool   get appendQualityToFilename => _appendQualityToFilename;
+  bool   get preferManualOverAuto   => _preferManualOverAuto;
+  bool   get pauseSingleStartsNext  => _pauseSingleStartsNext;
+  bool   get pauseAllStartsNext     => _pauseAllStartsNext;
+  bool   get notificationsEnabled   => _notificationsEnabled;
 
   /// Convenience: whether a speed cap is configured.
   bool get hasSpeedLimit => _speedLimit.trim().isNotEmpty;
@@ -162,6 +177,36 @@ class AppSettings extends ChangeNotifier {
     await _write(_kDefaultSubtitleFormat, _defaultSubtitleFormat);
   }
 
+  Future<void> setAppendQualityToFilename(bool v) async {
+    _appendQualityToFilename = v;
+    notifyListeners();
+    await _write(_kAppendQualityToFilename, v);
+  }
+
+  Future<void> setPreferManualOverAuto(bool v) async {
+    _preferManualOverAuto = v;
+    notifyListeners();
+    await _write(_kPreferManualOverAuto, v);
+  }
+
+  Future<void> setPauseSingleStartsNext(bool v) async {
+    _pauseSingleStartsNext = v;
+    notifyListeners();
+    await _write(_kPauseSingleStartsNext, v);
+  }
+
+  Future<void> setPauseAllStartsNext(bool v) async {
+    _pauseAllStartsNext = v;
+    notifyListeners();
+    await _write(_kPauseAllStartsNext, v);
+  }
+
+  Future<void> setNotificationsEnabled(bool v) async {
+    _notificationsEnabled = v;
+    notifyListeners();
+    await _write(_kNotificationsEnabled, v);
+  }
+
   // ── Load from disk ─────────────────────────────────────────────────────────
 
   Future<void> load() async {
@@ -181,6 +226,11 @@ class AppSettings extends ChangeNotifier {
     _playlistFolder = p.getBool(_kPlaylistFolder)  ?? true;
     _defaultSubtitleLang   = p.getString(_kDefaultSubtitleLang)   ?? 'en';
     _defaultSubtitleFormat = p.getString(_kDefaultSubtitleFormat) ?? 'srt';
+    _appendQualityToFilename = p.getBool(_kAppendQualityToFilename) ?? false;
+    _preferManualOverAuto   = p.getBool(_kPreferManualOverAuto)   ?? false;
+    _pauseSingleStartsNext  = p.getBool(_kPauseSingleStartsNext)  ?? false;
+    _pauseAllStartsNext     = p.getBool(_kPauseAllStartsNext)     ?? false;
+    _notificationsEnabled   = p.getBool(_kNotificationsEnabled)   ?? true;
 
     notifyListeners();
   }

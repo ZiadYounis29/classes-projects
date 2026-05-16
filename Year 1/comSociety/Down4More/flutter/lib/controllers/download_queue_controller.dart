@@ -9,6 +9,8 @@ import '../models/download_progress.dart';
 import '../models/output_format.dart';
 import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
+import '../services/download_history.dart';
+import '../services/notification_service.dart';
 import '../services/ytdlp_service.dart';
 import '../settings/app_settings.dart';
 
@@ -76,6 +78,21 @@ class QueueItem {
   DownloadProgress progress = DownloadProgress.idle;
   DownloadHandle? handle;
   StreamSubscription<DownloadProgress>? subscription;
+
+  /// True when the user requested a pause but the [handle] wasn't ready yet
+  /// (i.e. [_startItem] was still awaiting its async setup). [_startItem]
+  /// checks this flag immediately after creating the handle and applies the
+  /// pause so the request is never silently dropped.
+  bool pauseRequested = false;
+
+  /// True when a concurrency slot was freed for this item during pause
+  /// (i.e. _activeCount was decremented). [resumeItem]/[resumeAll] use this
+  /// to know whether they must re-claim the slot on resume.
+  ///
+  /// Without this flag, resuming always does _activeCount++ even when no slot
+  /// was freed on pause — causing the counter to drift above concurrency and
+  /// permanently block pending downloads once this item finishes.
+  bool slotFreed = false;
 }
 
 /// Manages a queue of downloads with configurable concurrency.
@@ -96,11 +113,14 @@ class DownloadQueueController extends ChangeNotifier {
   DownloadQueueController({
     required AppSettings appSettings,
     YtDlpService? service,
+    DownloadHistory? history,
   })  : _appSettings = appSettings,
-        _service = service ?? YtDlpService();
+        _service = service ?? YtDlpService(),
+        _history = history;
 
   final AppSettings _appSettings;
   final YtDlpService _service;
+  final DownloadHistory? _history;
 
   final List<QueueItem> _items = [];
   int _activeCount = 0;
@@ -254,6 +274,8 @@ class DownloadQueueController extends ChangeNotifier {
         item.progress = DownloadProgress.idle;
         item.handle = null;
         item.subscription = null;
+        item.pauseRequested = false;
+        item.slotFreed = false;
       }
     }
     notifyListeners();
@@ -279,6 +301,136 @@ class DownloadQueueController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Pause one actively downloading item. If [AppSettings.pauseSingleStartsNext]
+  /// is enabled, frees a concurrency slot so the next idle item in the queue
+  /// can start immediately. Otherwise the slot stays blocked until the item
+  /// is resumed.
+  ///
+  /// If the handle isn't ready yet (still in the async setup phase of
+  /// [_startItem]), the request is stored in [QueueItem.pauseRequested] so
+  /// [_startItem] can apply it immediately once the handle is created.
+  void pauseItem(QueueItem item) {
+    if (item.progress.phase != DownloadPhase.downloading) return;
+    // Use ?? false here: a null handle means the download is still starting
+    // up, NOT that it's already paused — we must not silently drop the request.
+    if (item.handle?.isPaused ?? false) return;
+    if (item.pauseRequested) return;
+
+    if (item.handle == null) {
+      // Handle not ready yet — store the request; _startItem will apply it.
+      item.pauseRequested = true;
+      notifyListeners();
+      return;
+    }
+
+    item.handle!.pause();
+    if (_appSettings.pauseSingleStartsNext) {
+      // Freeing the concurrency slot lets the queue loop pick up the next
+      // idle item — pausing one item should not stall the rest of the queue.
+      _activeCount--;
+      item.slotFreed = true;
+      notifyListeners();
+      // Kick the queue loop so a waiting item can fill the freed slot.
+      if (_running) _processQueue();
+    } else {
+      notifyListeners();
+    }
+  }
+
+  /// Resume a previously paused item. Re-claims a concurrency slot only if
+  /// one was freed during [pauseItem] (tracked by [QueueItem.slotFreed]).
+  /// Without this guard, resuming would increment _activeCount even when it
+  /// was never decremented, causing the counter to drift and permanently
+  /// blocking pending downloads once the item finishes.
+  void resumeItem(QueueItem item) {
+    if (item.progress.phase != DownloadPhase.downloading) return;
+
+    // Clear a pending pause request that hasn't been applied yet.
+    if (item.pauseRequested) {
+      item.pauseRequested = false;
+      item.slotFreed = false;
+      notifyListeners();
+      return;
+    }
+
+    if (!(item.handle?.isPaused ?? false)) return;
+    item.handle!.resume();
+    if (item.slotFreed) {
+      _activeCount++;
+      item.slotFreed = false;
+    }
+    notifyListeners();
+  }
+
+  /// Pause every actively downloading item. If [AppSettings.pauseAllStartsNext]
+  /// is enabled, frees concurrency slots so the next idle items can start.
+  ///
+  /// Items whose handle isn't ready yet get [QueueItem.pauseRequested] set
+  /// so [_startItem] applies the pause as soon as the handle is created.
+  void pauseAll() {
+    for (final item in _items) {
+      if (item.progress.phase != DownloadPhase.downloading) continue;
+      // ?? false: null handle means still starting up, not already paused.
+      if (item.handle?.isPaused ?? false) continue;
+      if (item.pauseRequested) continue;
+
+      if (item.handle == null) {
+        item.pauseRequested = true;
+        if (_appSettings.pauseAllStartsNext) {
+          item.slotFreed = true;
+        }
+      } else {
+        item.handle!.pause();
+        if (_appSettings.pauseAllStartsNext) {
+          _activeCount--;
+          item.slotFreed = true;
+        }
+      }
+    }
+    notifyListeners();
+    if (_appSettings.pauseAllStartsNext && _running) _processQueue();
+  }
+
+  /// Resume every paused item (including those with a pending pause request).
+  void resumeAll() {
+    for (final item in _items) {
+      if (item.progress.phase != DownloadPhase.downloading) continue;
+
+      if (item.pauseRequested) {
+        item.pauseRequested = false;
+        item.slotFreed = false;
+        continue;
+      }
+
+      if (item.handle?.isPaused ?? false) {
+        item.handle!.resume();
+        if (item.slotFreed) {
+          _activeCount++;
+          item.slotFreed = false;
+        }
+      }
+    }
+    notifyListeners();
+  }
+
+  /// True if every actively downloading item is paused or has a pending
+  /// pause request (handle not ready yet).
+  bool get allPaused {
+    final active = _items
+        .where((i) => i.progress.phase == DownloadPhase.downloading)
+        .toList();
+    if (active.isEmpty) return false;
+    return active.every((i) =>
+        i.pauseRequested || (i.handle?.isPaused ?? false));
+  }
+
+  /// True if at least one actively downloading item is paused or has a
+  /// pending pause request.
+  bool get anyPaused =>
+      _items.any((i) =>
+          i.progress.phase == DownloadPhase.downloading &&
+          (i.pauseRequested || (i.handle?.isPaused ?? false)));
+
   /// Reset one item to idle and re-enter the queue loop. Used by the
   /// per-row "Retry" button. If the queue isn't currently running we restart
   /// it so this single item gets picked up immediately.
@@ -290,6 +442,8 @@ class DownloadQueueController extends ChangeNotifier {
     item.progress = DownloadProgress.idle;
     item.handle = null;
     item.subscription = null;
+    item.pauseRequested = false;
+    item.slotFreed = false;
     notifyListeners();
     if (!_running) {
       _running = true;
@@ -415,6 +569,12 @@ class DownloadQueueController extends ChangeNotifier {
     _qualityTargetHeight = targetHeight;
     _qualityAudioOnly = audioOnly;
 
+    // In per-item mode the user owns each row's selection — don't overwrite.
+    if (_qualityMode == QualityMode.perItem) {
+      notifyListeners();
+      return;
+    }
+
     for (final item in _items) {
       if (item.metadata == null) {
         item.selectedFormat = null;
@@ -427,6 +587,14 @@ class DownloadQueueController extends ChangeNotifier {
 
   /// Apply a global output-format override to every item.
   void setGlobalOutputFormat(OutputFormat? format) {
+    // In per-item mode the user owns each row's format — don't overwrite.
+    if (_qualityMode == QualityMode.perItem) {
+      if (format != null) {
+        _globalSubtitles = _globalSubtitles.snapEmbedFor(format);
+      }
+      notifyListeners();
+      return;
+    }
     for (final item in _items) {
       item.selectedOutputFormat = format;
       if (format != null && item.subtitleSettings != null) {
@@ -581,8 +749,13 @@ class DownloadQueueController extends ChangeNotifier {
           item.title = m.title;
         }
         item.thumbnailUrl ??= m.thumbnailUrl;
-        // Apply the stored preset to this item.
-        _applyPresetToItem(item);
+        // In global mode apply the stored preset; in per-item mode the user
+        // hasn't picked anything for this item yet so fall back to best.
+        if (_qualityMode == QualityMode.global) {
+          _applyPresetToItem(item);
+        } else {
+          item.selectedFormat ??= m.formats.first;
+        }
         notifyListeners();
       } catch (_) {
         // Metadata fetch failed — fall through to the bv*+ba/b fallback below.
@@ -613,8 +786,150 @@ class DownloadQueueController extends ChangeNotifier {
     // skips all the subtitle flags.
     final SubtitleSettings effectiveSubs =
         item.subtitleSettings ?? _globalSubtitles;
+
+    // Resolve the sentinel 'auto-orig' to this item's actual *-orig lang code.
+    // The sentinel is set in batch/playlist "All same" mode when the user picks
+    // "Original language (auto)" — each video may have a different original
+    // language, so we look up the item's own availableAutoCaptionLangs here.
+    //
+    // BUG FIX: if this item has no auto-caption track but DOES have manual
+    // subtitle tracks, fall back to the manual track rather than disabling
+    // subtitles entirely. Previously the sentinel block just called
+    // SubtitleSettings.disabled whenever origCode was empty, silently dropping
+    // subs for videos that only have manual captions.
+    SubtitleSettings resolvedSubs = effectiveSubs;
+    if (effectiveSubs.enabled &&
+        effectiveSubs.useAutoCaption &&
+        effectiveSubs.language == kAutoOrigSentinel) {
+      final meta = item.metadata;
+      final origCode = meta?.availableAutoCaptionLangs
+          .firstWhere((k) => k.endsWith('-orig'), orElse: () => '');
+      if (origCode != null && origCode.isNotEmpty) {
+        // Happy path: resolve the sentinel to the per-item *-orig lang code.
+        resolvedSubs = effectiveSubs.copyWith(language: origCode);
+      } else if (meta != null && meta.availableSubtitleLangs.isNotEmpty) {
+        // Auto→manual fallback for the sentinel case: this video has no
+        // auto-caption track but does have manual subtitles. Use the first
+        // available manual language rather than silently skipping subs.
+        resolvedSubs = effectiveSubs.copyWith(
+          language: meta.availableSubtitleLangs.first,
+          useAutoCaption: false,
+        );
+      } else {
+        // No caption track of any kind — disable for this item.
+        resolvedSubs = SubtitleSettings.disabled;
+      }
+    }
+
+    // Resolve manual subtitle language availability per-item.
+    // If the globally-selected manual language doesn't exist on this video,
+    // we try two fallbacks rather than letting yt-dlp fail the whole download:
+    //   1. Downgrade to this item's *-orig auto-caption track if one exists.
+    //   2. Otherwise disable subtitles entirely for this item.
+    // We only do this when metadata was fetched (preview pass ran); if it
+    // wasn't we pass through and let yt-dlp decide — it may still find the
+    // track, and a failure is better than silently dropping subs the user
+    // explicitly requested.
+    // Manual→auto fallback: if requested manual language doesn't exist,
+    // fall back to an auto-caption for the same language (or *-orig), then
+    // disable entirely if nothing is available.
+    if (resolvedSubs.enabled &&
+        !resolvedSubs.useAutoCaption &&
+        resolvedSubs.language != kAutoOrigSentinel) {
+      final meta = item.metadata;
+      // BUG FIX: removed `meta.availableSubtitleLangs.isNotEmpty` guard.
+      // That guard incorrectly skipped the entire fallback block for videos
+      // that have zero manual subtitle tracks (but may still have
+      // auto-captions). `availableSubtitleLangs.contains(...)` already
+      // returns false for an empty list, so the guard was redundant and
+      // caused the auto-caption fallback to never fire for those videos.
+      if (meta != null) {
+        final hasManual =
+            meta.availableSubtitleLangs.contains(resolvedSubs.language);
+        if (!hasManual) {
+          // No manual track for the requested language on this item.
+          // Try to find an auto-caption for the exact language first, then
+          // fall back to the *-orig track as a last resort.
+          final exactAuto = meta.availableAutoCaptionLangs.firstWhere(
+            (k) => k == resolvedSubs.language,
+            orElse: () => '',
+          );
+          final origCode = exactAuto.isNotEmpty
+              ? exactAuto
+              : meta.availableAutoCaptionLangs
+                  .firstWhere((k) => k.endsWith('-orig'), orElse: () => '');
+          if (origCode.isNotEmpty) {
+            // Fallback 1: use auto-caption for this language (or *-orig).
+            resolvedSubs = resolvedSubs.copyWith(
+              language: origCode,
+              useAutoCaption: true,
+            );
+          } else {
+            // Fallback 2: no caption track of any kind — skip silently.
+            resolvedSubs = SubtitleSettings.disabled;
+          }
+        }
+      }
+    }
+
+    // Auto→manual fallback: if the user selected auto-captions but the
+    // auto track doesn't exist for this item, try the manual track for the
+    // same language before giving up.
+    if (resolvedSubs.enabled &&
+        resolvedSubs.useAutoCaption &&
+        resolvedSubs.language != kAutoOrigSentinel) {
+      final meta = item.metadata;
+      if (meta != null) {
+        final hasAuto =
+            meta.availableAutoCaptionLangs.contains(resolvedSubs.language) ||
+            meta.availableAutoCaptionLangs
+                .contains('${resolvedSubs.language}-orig');
+        if (!hasAuto) {
+          if (meta.availableSubtitleLangs.contains(resolvedSubs.language)) {
+            // Upgrade to the manual track for the same language.
+            resolvedSubs = resolvedSubs.copyWith(useAutoCaption: false);
+          } else {
+            // No track of any kind — skip silently.
+            resolvedSubs = SubtitleSettings.disabled;
+          }
+        }
+      }
+    }
+
+    // "Prefer manual over auto" upgrade pass.
+    // When enabled, if the user picked auto-captions but a manual track exists
+    // for the same language, silently upgrade — manual captions are usually
+    // more accurate and may carry translations the auto track lacks.
+    if (resolvedSubs.enabled &&
+        resolvedSubs.useAutoCaption &&
+        _appSettings.preferManualOverAuto) {
+      final meta = item.metadata;
+      if (meta != null) {
+        final lang = resolvedSubs.language;
+        // Derive base language code for *-orig tracks (e.g. 'en-orig' → 'en').
+        final baseLang = lang.endsWith('-orig')
+            ? lang.substring(0, lang.length - 5)
+            : lang;
+        if (meta.availableSubtitleLangs.contains(baseLang)) {
+          resolvedSubs = resolvedSubs.copyWith(
+            language: baseLang,
+            useAutoCaption: false,
+          );
+        }
+      }
+    }
+
     final SubtitleSettings? subsForService =
-        effectiveSubs.enabled ? effectiveSubs : null;
+        resolvedSubs.enabled ? resolvedSubs : null;
+
+    // When the user has enabled "append quality to filename", build a custom
+    // filename from the item title + quality label so the downloaded file
+    // reflects the chosen quality without the yt-dlp [id] suffix.
+    String? customFilename;
+    if (_appSettings.appendQualityToFilename) {
+      final title = (item.metadata?.title ?? item.title).trim();
+      customFilename = '$title [${format.label}]';
+    }
 
     item.handle = _service.download(
       // Prefer the richer metadata from a preview pass when we have it;
@@ -632,10 +947,24 @@ class DownloadQueueController extends ChangeNotifier {
       format: format,
       outputDir: dir,
       outputExt: outputExt,
+      customFilename: customFilename,
       rateLimit: rateLimit,
       keepPartial: _appSettings.keepPartial,
       subtitles: subsForService,
     );
+
+    // Apply any pause request that arrived while the handle was being set up.
+    // This window covers the async time spent in _resolveOutputDir() and
+    // (when needed) fetchMetadata(), during which item.handle is null but
+    // item.progress.phase is already DownloadPhase.downloading.
+    if (item.pauseRequested) {
+      item.pauseRequested = false;
+      item.handle!.pause();
+      if (_appSettings.pauseSingleStartsNext) {
+        _activeCount--;
+        item.slotFreed = true;
+      }
+    }
 
     item.subscription = item.handle!.stream.listen(
       (event) {
@@ -646,13 +975,75 @@ class DownloadQueueController extends ChangeNotifier {
         _activeCount--;
         item.subscription = null;
 
+        // Record downloads in history (finished, failed, or cancelled).
+        if (_history != null) {
+          final title = item.metadata?.title ?? item.title;
+          if (item.progress.phase == DownloadPhase.finished &&
+              item.progress.outputPath != null) {
+            _history!.add(HistoryEntry(
+              id: '${DateTime.now().millisecondsSinceEpoch}_${item.url.hashCode}',
+              title: title,
+              url: item.url,
+              outputPath: item.progress.outputPath!,
+              finishedAt: DateTime.now(),
+              quality: item.selectedFormat?.label ?? '',
+              outputExt: item.selectedOutputFormat?.ext ?? '',
+            ));
+          } else if (item.progress.phase == DownloadPhase.cancelled) {
+            _history!.add(HistoryEntry(
+              id: '${DateTime.now().millisecondsSinceEpoch}_${item.url.hashCode}',
+              title: title,
+              url: item.url,
+              outputPath: '',
+              finishedAt: DateTime.now(),
+              quality: item.selectedFormat?.label ?? '',
+              outputExt: item.selectedOutputFormat?.ext ?? '',
+              status: DownloadStatus.cancelled,
+            ));
+          }
+        }
+
         // Auto-retry on error if configured.
         final maxRetries = _appSettings.autoRetry;
         if (item.progress.phase == DownloadPhase.error && maxRetries > 0) {
           _retryItem(item, maxRetries);
+        } else if (item.progress.phase == DownloadPhase.error &&
+            _history != null) {
+          // No retries — log as failed.
+          final title = item.metadata?.title ?? item.title;
+          _history!.add(HistoryEntry(
+            id: '${DateTime.now().millisecondsSinceEpoch}_${item.url.hashCode}',
+            title: title,
+            url: item.url,
+            outputPath: '',
+            finishedAt: DateTime.now(),
+            quality: item.selectedFormat?.label ?? '',
+            outputExt: item.selectedOutputFormat?.ext ?? '',
+            status: DownloadStatus.failed,
+            errorMessage: item.progress.errorMessage,
+          ));
         }
 
         notifyListeners();
+
+        // When the entire queue is now done, fire a batch summary notification.
+        if (allDone) {
+          final finished = _items
+              .where((i) => i.progress.phase == DownloadPhase.finished)
+              .length;
+          if (finished > 0) {
+            NotificationService.notifyBatchFinished(
+              finished,
+              _groupFolderName.isNotEmpty ? _groupFolderName : 'Batch',
+            );
+          }
+        }
+
+        // Kick the queue loop so the next idle item can fill the freed slot.
+        // Without this, a finished/errored/cancelled download would never
+        // unblock the queue — items would stall indefinitely after the first
+        // batch completes.
+        if (_running) _processQueue();
       },
     );
 
@@ -678,7 +1069,14 @@ class DownloadQueueController extends ChangeNotifier {
     if (!_running) return;
 
     item.progress = DownloadProgress.idle;
+    item.pauseRequested = false;
+    item.slotFreed = false;
     notifyListeners();
+
+    // The item is now idle again — kick the queue loop so it gets picked up.
+    // Without this the auto-retry slot would stay idle indefinitely because
+    // _processQueue already exited when the item errored out.
+    _processQueue();
   }
 
   Future<String> _resolveOutputDir() async {
