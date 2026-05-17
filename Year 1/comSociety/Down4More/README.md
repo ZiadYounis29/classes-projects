@@ -8,15 +8,14 @@ This folder contains **two implementations of the same app**:
 
 | Folder | Implementation | Status |
 |---|---|---|
-| [`python/`](./python) | The original Python `http.server` + HTML/CSS/JS prototype. Single-file deploy, browser-based UI, runs on Win/Mac/Linux. | **Working today.** Treated as the reference behaviour while the Flutter port catches up. |
-| [`flutter/`](./flutter) | The new Flutter port. One Dart codebase that targets Linux, macOS, Windows, and Android with native UI on each platform. Self-contained per device — bundles `yt-dlp` + `ffmpeg` so there's no hub or HTTP server. | **In progress.** PR 2 is the scaffold; download logic lands in PR 3+. |
+| [`flutter/`](./flutter) | The current Flutter app. One Dart codebase that targets Linux, macOS, Windows, and Android with native UI on each platform. Self-contained per device — bundles `yt-dlp` + `ffmpeg` on Windows so there's no hub or HTTP server. | **Active.** Feature parity with the Python prototype reached; mobile backend is the next chunk. |
+| [`python/legacy/`](./python/legacy) | The original Python `http.server` + HTML/CSS/JS prototype, kept for reference. | **Archived.** No longer maintained. |
 
-## Why both?
+## Why keep the Python version around?
 
-The Python version is shippable as-is and lets us actually use the app while
-the Flutter rewrite is being built. Once the Flutter port reaches feature
-parity (around PR 8 in the roadmap), the Python prototype can be archived or
-deleted.
+It's the original Computer & Society project, plus a useful behaviour
+reference while reviewing the Flutter port. It can be removed once the
+Flutter app has been signed-off through a full release cycle.
 
 ## How to run
 

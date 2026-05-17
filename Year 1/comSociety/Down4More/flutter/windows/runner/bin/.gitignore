@@ -1,0 +1,4 @@
+# Fetched at build time by tools/fetch_windows_binaries.{ps1,sh}.
+# Never committed — these are large licensed binaries downloaded from
+# upstream GitHub Releases (yt-dlp) and gyan.dev (ffmpeg).
+*.exe
