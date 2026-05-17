@@ -58,4 +58,13 @@ class AndroidBackendStub implements DownloadBackend {
   }) {
     return DownloadHandle.failed(unsupportedMessage);
   }
+
+  /// The stub backend has no way to open files — return `false` so the UI
+  /// surfaces its existing "couldn't open" snackbar. The real Android
+  /// backend overrides this with a MethodChannel call to the native plugin.
+  @override
+  Future<bool> openFile(String path) async => false;
+
+  @override
+  Future<bool> openFolder(String path) async => false;
 }

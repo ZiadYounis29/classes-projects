@@ -180,6 +180,15 @@ class DownloadQueueController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Open a finished item's file via the active backend (desktop uses
+  /// `url_launcher`, Android uses the native MethodChannel that resolves
+  /// MediaStore URIs). Returns `false` so the caller can surface a
+  /// "couldn't open" snackbar without juggling exceptions.
+  Future<bool> openFile(String path) => _service.openFile(path);
+
+  /// Reveal a finished item's parent folder via the active backend.
+  Future<bool> openFolder(String path) => _service.openFolder(path);
+
   // ── Queue lifecycle ────────────────────────────────────────────────────
 
   List<QueueItem> get items => List.unmodifiable(_items);

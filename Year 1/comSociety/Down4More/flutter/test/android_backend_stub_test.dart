@@ -86,5 +86,15 @@ void main() {
       expect(msg, contains('Android'));
       expect(msg.toLowerCase(), contains('desktop'));
     });
+
+    test('openFile returns false (without throwing) so the UI shows its '
+        '"couldn\'t open" snackbar instead of crashing', () async {
+      expect(await stub.openFile('/whatever'), isFalse);
+    });
+
+    test('openFolder returns false (without throwing) on the stub backend',
+        () async {
+      expect(await stub.openFolder('/whatever'), isFalse);
+    });
   });
 }

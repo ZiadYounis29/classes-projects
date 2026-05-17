@@ -3,8 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
+import '../services/download_backend.dart';
+import '../services/download_backend_factory.dart';
 import '../settings/app_settings.dart';
 
 /// Downloaded-files browser.
@@ -15,8 +16,18 @@ import '../settings/app_settings.dart';
 /// (folders are removed recursively after a confirmation dialog that
 /// clearly states all contents will be lost).
 class FilesScreen extends StatefulWidget {
-  const FilesScreen({super.key, required this.appSettings});
+  FilesScreen({
+    super.key,
+    required this.appSettings,
+    DownloadBackend? backend,
+  }) : backend = backend ?? createDefaultBackend();
+
   final AppSettings appSettings;
+
+  /// Used for the per-row "Open" tap and the folder icon in the header.
+  /// Defaults to [createDefaultBackend] so screens consumers don't have to
+  /// thread a backend through unless they're injecting one in tests.
+  final DownloadBackend backend;
 
   @override
   State<FilesScreen> createState() => _FilesScreenState();
@@ -119,16 +130,18 @@ class _FilesScreenState extends State<FilesScreen> {
   }
 
   Future<void> _openFile(String path) async {
-    final uri = Uri.file(path);
-    if (!await launchUrl(uri)) {
+    if (!await widget.backend.openFile(path)) {
       _showSnack("Couldn't open the file.");
     }
   }
 
   Future<void> _openInFileManager() async {
     if (_currentDir == null) return;
-    final uri = Uri.file(_currentDir!);
-    if (!await launchUrl(uri)) {
+    // openFile() opens a path in the system viewer; for a directory path
+    // that's the system file manager. We don't use openFolder() here
+    // because that one assumes a *file* path and would pop up one level
+    // to the parent of the dir we actually want to show.
+    if (!await widget.backend.openFile(_currentDir!)) {
       _showSnack("Couldn't open the folder.");
     }
   }

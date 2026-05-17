@@ -57,4 +57,23 @@ abstract class DownloadBackend {
     bool keepPartial = false,
     SubtitleSettings? subtitles,
   });
+
+  /// Open the file at [path] in the platform's default viewer. Returns
+  /// `true` on success, `false` otherwise (so callers can show a "couldn't
+  /// open" hint without needing to special-case exceptions).
+  ///
+  /// On desktop this delegates to `url_launcher` against a `Uri.file(path)`.
+  /// On Android the URL launcher can't open arbitrary `file://` URIs since
+  /// API 24, so the native plugin resolves a MediaStore content URI for
+  /// files under `Movies/Down4More/...` and hands that to `ACTION_VIEW`.
+  Future<bool> openFile(String path);
+
+  /// Reveal the file at [path] inside its containing folder using the
+  /// platform's file manager. Returns `true` on success.
+  ///
+  /// On desktop this is a `launchUrl(Uri.file(parentDir))`. On Android the
+  /// native plugin opens the Files app filtered to the parent collection
+  /// (`Movies/Down4More` for video, `Music/Down4More` for audio) so the
+  /// user lands somewhere they can actually navigate from.
+  Future<bool> openFolder(String path);
 }
