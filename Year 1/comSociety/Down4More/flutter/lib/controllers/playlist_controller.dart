@@ -1,7 +1,8 @@
 import 'package:flutter/foundation.dart';
 
 import '../models/playlist_entry.dart';
-import '../services/ytdlp_service.dart';
+import '../services/download_backend.dart';
+import '../services/download_backend_factory.dart';
 
 /// Phases the playlist screen can be in.
 enum PlaylistPhase {
@@ -16,10 +17,10 @@ enum PlaylistPhase {
 /// Once the user has selected entries, the Playlist screen hands them off
 /// to a [DownloadQueueController] to actually download.
 class PlaylistController extends ChangeNotifier {
-  PlaylistController({YtDlpService? service})
-      : _service = service ?? YtDlpService();
+  PlaylistController({DownloadBackend? service})
+      : _service = service ?? createDefaultBackend();
 
-  final YtDlpService _service;
+  final DownloadBackend _service;
 
   PlaylistPhase _phase = PlaylistPhase.idle;
   List<PlaylistEntry> _entries = [];

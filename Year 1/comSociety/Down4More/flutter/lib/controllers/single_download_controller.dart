@@ -9,9 +9,10 @@ import '../models/download_progress.dart';
 import '../models/output_format.dart';
 import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
+import '../services/download_backend.dart';
+import '../services/download_backend_factory.dart';
 import '../services/download_history.dart';
 import '../services/notification_service.dart';
-import '../services/ytdlp_service.dart';
 import '../settings/app_settings.dart';
 
 /// Owns the state of *one* single-URL download flow: typing → fetching
@@ -22,11 +23,11 @@ import '../settings/app_settings.dart';
 /// it's owned directly by its screen.
 class SingleDownloadController extends ChangeNotifier {
   SingleDownloadController({
-    YtDlpService? service,
+    DownloadBackend? service,
     Future<String> Function()? defaultOutputDir,
     AppSettings? appSettings,
     DownloadHistory? history,
-  })  : _service = service ?? YtDlpService(),
+  })  : _service = service ?? createDefaultBackend(),
         _defaultOutputDir = defaultOutputDir ?? _platformDownloadsDir,
         _appSettings = appSettings,
         _history = history {
@@ -42,7 +43,7 @@ class SingleDownloadController extends ChangeNotifier {
     }
   }
 
-  final YtDlpService _service;
+  final DownloadBackend _service;
   final Future<String> Function() _defaultOutputDir;
   final AppSettings? _appSettings;
   final DownloadHistory? _history;
