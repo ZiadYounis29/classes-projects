@@ -50,6 +50,12 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          # Pinned to the same stable that's been used to develop and verify
+          # the project locally. The newer 3.41+ stable flagged a pile of
+          # `value` -> `initialValue` deprecation infos on widgets that
+          # nothing in this PR touches, so floating CI would have broken
+          # green builds for reasons unrelated to the PRs in flight.
+          flutter-version: '3.27.4'
           channel: stable
           cache: true
 
