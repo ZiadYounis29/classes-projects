@@ -84,7 +84,7 @@ jobs:
         # same step), so use the absolute path.
         working-directory: "Year 1/comSociety/Down4More/flutter/tools"
         run: |
-          $version = '${{ github.event.inputs.app_version || ''0.1.0'' }}'
+          $version = '${{ github.event.inputs.app_version || '0.1.0' }}'
           $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
           if (-not (Test-Path $iscc)) {
             $iscc = 'C:\Program Files\Inno Setup 6\ISCC.exe'
