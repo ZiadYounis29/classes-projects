@@ -1,0 +1,82 @@
+# CI for the Down4More Flutter app at
+# `Year 1/comSociety/Down4More/flutter/`.
+#
+# Runs on every push to develop2/main and on every PR targeting those
+# branches. Three checks, all Linux-side, all fast:
+#
+#   1. `flutter analyze`            (lints + static analysis)
+#   2. `flutter test`               (the full Dart unit + widget suite)
+#   3. `flutter build apk --debug`  (catches Android/Kotlin compile errors)
+#
+# The debug APK is uploaded as a build artifact so a maintainer on a
+# non-Android machine can grab it and sideload onto a real device with
+# `adb install -r app-debug.apk`.
+#
+# Windows-side verification lives in `.github/workflows/windows-installer.yml`.
+
+name: CI
+
+on:
+  push:
+    branches: [ develop2, main ]
+  pull_request:
+    branches: [ develop2, main ]
+  workflow_dispatch:
+
+defaults:
+  run:
+    # All Flutter commands need to run from the project directory.
+    # Quoted because the path has a space.
+    working-directory: "Year 1/comSociety/Down4More/flutter"
+
+jobs:
+  flutter:
+    name: analyze + test + APK build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Android SDK is pre-installed on ubuntu-latest at
+      # /usr/local/lib/android/sdk so we only need Java + Flutter.
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # Pinned to the same stable that's been used to develop and verify
+          # the project locally. The newer 3.41+ stable flagged a pile of
+          # `value` -> `initialValue` deprecation infos on widgets that
+          # nothing in this PR touches, so floating CI would have broken
+          # green builds for reasons unrelated to the PRs in flight.
+          flutter-version: '3.27.4'
+          channel: stable
+          cache: true
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: flutter analyze
+        run: flutter analyze
+
+      - name: flutter test
+        run: flutter test --reporter expanded
+
+      - name: flutter build apk --debug
+        run: flutter build apk --debug
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: down4more-debug-apk
+          # path is repo-root-relative for upload-artifact (defaults.run only
+          # applies to `run` steps).
+          path: "Year 1/comSociety/Down4More/flutter/build/app/outputs/flutter-apk/app-debug.apk"
+          if-no-files-found: error
+          retention-days: 14
