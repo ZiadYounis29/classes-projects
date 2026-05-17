@@ -9,9 +9,10 @@ import '../models/download_progress.dart';
 import '../models/output_format.dart';
 import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
+import '../services/download_backend.dart';
+import '../services/download_backend_factory.dart';
 import '../services/download_history.dart';
 import '../services/notification_service.dart';
-import '../services/ytdlp_service.dart';
 import '../settings/app_settings.dart';
 
 /// Title strings yt-dlp returns from `--flat-playlist` when it has no real
@@ -112,14 +113,14 @@ class QueueItem {
 class DownloadQueueController extends ChangeNotifier {
   DownloadQueueController({
     required AppSettings appSettings,
-    YtDlpService? service,
+    DownloadBackend? service,
     DownloadHistory? history,
   })  : _appSettings = appSettings,
-        _service = service ?? YtDlpService(),
+        _service = service ?? createDefaultBackend(),
         _history = history;
 
   final AppSettings _appSettings;
-  final YtDlpService _service;
+  final DownloadBackend _service;
   final DownloadHistory? _history;
 
   final List<QueueItem> _items = [];
