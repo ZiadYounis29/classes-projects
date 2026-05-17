@@ -351,6 +351,7 @@ class AndroidYtDlpBackend implements DownloadBackend {
   /// `Movies/Down4More/...` so the receiving viewer app gets a properly
   /// scoped URI rather than a raw `file://` (which Android blocks since
   /// API 24).
+  @override
   Future<bool> openFile(String path) async {
     try {
       final ok = await _method.invokeMethod<bool>(
@@ -366,6 +367,7 @@ class AndroidYtDlpBackend implements DownloadBackend {
   /// Ask the plugin to reveal a file's containing folder. On Android the
   /// closest analogue is opening the Files app filtered to the parent
   /// MediaStore collection (Movies / Music). Returns true on success.
+  @override
   Future<bool> openFolder(String path) async {
     try {
       final ok = await _method.invokeMethod<bool>(

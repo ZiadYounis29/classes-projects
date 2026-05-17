@@ -3,8 +3,9 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
-import 'package:url_launcher/url_launcher.dart';
 
+import '../services/download_backend.dart';
+import '../services/download_backend_factory.dart';
 import '../services/download_history.dart';
 
 /// Displays the chronological download history log.
@@ -14,10 +15,21 @@ import '../services/download_history.dart';
 /// or delete the entry from the log. Failed and cancelled entries are shown
 /// with distinct styling and a re-download shortcut.
 class HistoryScreen extends StatelessWidget {
-  const HistoryScreen({super.key, required this.history, this.onRetryUrl});
+  HistoryScreen({
+    super.key,
+    required this.history,
+    this.onRetryUrl,
+    DownloadBackend? backend,
+  }) : backend = backend ?? createDefaultBackend();
 
   final DownloadHistory history;
   final void Function(String url)? onRetryUrl;
+
+  /// Used for the per-row Open file / Open folder buttons. Defaults to the
+  /// platform's [createDefaultBackend] selection — desktop uses
+  /// `url_launcher`; Android uses the [YtDlpPlugin] MethodChannel which
+  /// resolves MediaStore URIs so the receiving viewer can read the file.
+  final DownloadBackend backend;
 
   @override
   Widget build(BuildContext context) {
@@ -136,7 +148,7 @@ class HistoryScreen extends StatelessWidget {
   }
 
   Future<void> _openFile(BuildContext context, String path) async {
-    if (!await launchUrl(Uri.file(path))) {
+    if (!await backend.openFile(path)) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Couldn't open the file.")),
@@ -146,8 +158,7 @@ class HistoryScreen extends StatelessWidget {
   }
 
   Future<void> _openFolder(BuildContext context, String path) async {
-    final dir = p.dirname(path);
-    if (!await launchUrl(Uri.file(dir))) {
+    if (!await backend.openFolder(path)) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Couldn't open the folder.")),

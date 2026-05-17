@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/download_queue_controller.dart';
 import '../models/download_progress.dart';
@@ -428,8 +427,7 @@ class QueueItemRow extends StatelessWidget {
   }
 
   Future<void> _openPath(BuildContext context, String path) async {
-    final uri = Uri.file(path);
-    if (!await launchUrl(uri) && context.mounted) {
+    if (!await queue.openFile(path) && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Couldn't open the file.")),
       );
@@ -437,9 +435,7 @@ class QueueItemRow extends StatelessWidget {
   }
 
   Future<void> _openFolder(BuildContext context, String path) async {
-    final dir = File(path).parent.path;
-    final uri = Uri.file(dir);
-    if (!await launchUrl(uri) && context.mounted) {
+    if (!await queue.openFolder(path) && context.mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Couldn't open the folder.")),
       );

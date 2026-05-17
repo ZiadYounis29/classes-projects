@@ -1,8 +1,5 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../controllers/single_download_controller.dart';
 import '../models/download_progress.dart';
@@ -155,16 +152,13 @@ class SingleScreenState extends State<SingleScreen> {
   }
 
   Future<void> _openFile(String path) async {
-    final uri = Uri.file(path);
-    if (!await launchUrl(uri)) {
+    if (!await _controller.openFile(path)) {
       _showSnack("Couldn't open the file.");
     }
   }
 
   Future<void> _openFolder(String path) async {
-    final dir = File(path).parent.path;
-    final uri = Uri.file(dir);
-    if (!await launchUrl(uri)) {
+    if (!await _controller.openFolder(path)) {
       _showSnack("Couldn't open the folder.");
     }
   }

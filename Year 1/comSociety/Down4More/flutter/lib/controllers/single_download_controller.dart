@@ -76,6 +76,15 @@ class SingleDownloadController extends ChangeNotifier {
 
   bool get isPaused => _progress.paused;
 
+  /// Open a downloaded file using the active backend (desktop uses
+  /// `url_launcher`, Android uses the native MethodChannel that resolves
+  /// MediaStore URIs). Returns `false` so the caller can surface a
+  /// "couldn't open" snackbar without juggling exceptions.
+  Future<bool> openFile(String path) => _service.openFile(path);
+
+  /// Reveal a downloaded file's parent folder using the active backend.
+  Future<bool> openFolder(String path) => _service.openFolder(path);
+
   /// Run yt-dlp metadata fetch. Updates [progress] through fetching → ready
   /// (or → error). Safe to call again to retry; resets all prior state.
   Future<void> fetchMetadata(String url) async {

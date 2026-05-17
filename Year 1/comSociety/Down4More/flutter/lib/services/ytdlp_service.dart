@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/download_progress.dart';
 import '../models/playlist_entry.dart';
@@ -584,6 +585,38 @@ class YtDlpService implements DownloadBackend {
         state.resumeCallback?.call(); // fire-and-forget async
       },
     );
+  }
+
+  /// Open the downloaded file in the system's default viewer.
+  ///
+  /// Wraps `url_launcher`'s `launchUrl(Uri.file(...))` so all desktop
+  /// callers go through the same code path as the Android backend's
+  /// MethodChannel implementation. Catches everything so callers can
+  /// branch on the boolean without needing a try/catch at every call site.
+  @override
+  Future<bool> openFile(String path) async {
+    if (path.isEmpty) return false;
+    try {
+      return await launchUrl(Uri.file(path));
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// Open the parent folder of [path] in the system file manager.
+  ///
+  /// We deliberately pop one level so reveal-style "show in folder" lands
+  /// in the directory containing the file rather than trying to open the
+  /// file itself a second time.
+  @override
+  Future<bool> openFolder(String path) async {
+    if (path.isEmpty) return false;
+    try {
+      final dir = File(path).parent.path;
+      return await launchUrl(Uri.file(dir));
+    } catch (_) {
+      return false;
+    }
   }
 }
 
