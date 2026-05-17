@@ -1,0 +1,99 @@
+# Build the Down4More Windows installer on every push / PR / on demand
+# without anyone needing a Windows box.
+#
+# Pipeline (~10 min wall clock):
+#   1. checkout
+#   2. install Flutter (subosito/flutter-action handles VS C++ tools via
+#      the pre-installed VS 2022 on windows-latest)
+#   3. flutter pub get + flutter config --enable-windows-desktop
+#   4. tools\fetch_windows_binaries.ps1 (pulls yt-dlp.exe + ffmpeg.exe)
+#   5. flutter build windows --release
+#   6. choco install innosetup
+#   7. iscc tools\windows_installer.iss
+#   8. upload Down4More-Setup-<version>.exe as an actions artifact
+#
+# The user grabs the EXE from the Actions tab, runs it on any Windows
+# machine, and gets a per-user install with start menu + uninstaller.
+# No local Windows tooling needed.
+
+name: Windows installer
+
+on:
+  push:
+    branches: [ develop2, main ]
+  pull_request:
+    branches: [ develop2, main ]
+  workflow_dispatch:
+    inputs:
+      app_version:
+        description: 'Version baked into Down4More-Setup-<version>.exe'
+        default: '0.1.0'
+        required: true
+
+defaults:
+  run:
+    # PowerShell Core is the standard cross-platform shell on windows
+    # runners; consistent with the existing tools\fetch_windows_binaries.ps1
+    # which uses `pwsh` syntax.
+    shell: pwsh
+    working-directory: "Year 1/comSociety/Down4More/flutter"
+
+jobs:
+  build:
+    name: Build Down4More-Setup-x.y.z.exe
+    runs-on: windows-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Enable Windows desktop target
+        run: flutter config --enable-windows-desktop
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      # Drops yt-dlp.exe + ffmpeg.exe into windows/runner/bin/ so the
+      # CMake install rule (windows/CMakeLists.txt) can copy them into
+      # build/windows/x64/runner/Release/ during `flutter build windows`.
+      - name: Fetch bundled yt-dlp + ffmpeg
+        run: .\tools\fetch_windows_binaries.ps1
+
+      - name: flutter build windows --release
+        run: flutter build windows --release
+
+      - name: Install Inno Setup
+        # Inno Setup is not pre-installed on windows-latest. Chocolatey is
+        # though, so this is the lightest-weight install path.
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile Inno Setup installer
+        # iscc is hardcoded at this path by the chocolatey package. We
+        # don't rely on PATH (choco doesn't always re-shim PATH for the
+        # same step), so use the absolute path.
+        working-directory: "Year 1/comSociety/Down4More/flutter/tools"
+        run: |
+          $version = '${{ github.event.inputs.app_version || ''0.1.0'' }}'
+          $iscc = 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+          if (-not (Test-Path $iscc)) {
+            $iscc = 'C:\Program Files\Inno Setup 6\ISCC.exe'
+          }
+          & $iscc "/DMyAppVersion=$version" windows_installer.iss
+          if ($LASTEXITCODE -ne 0) {
+            throw "iscc exited with code $LASTEXITCODE"
+          }
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: down4more-windows-installer
+          path: "Year 1/comSociety/Down4More/flutter/tools/Output/Down4More-Setup-*.exe"
+          if-no-files-found: error
+          retention-days: 30
