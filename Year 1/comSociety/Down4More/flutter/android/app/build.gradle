@@ -46,6 +46,10 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+        // youtubedl-android ships ZIP archives renamed to .so (libpython.zip.so,
+        // libffmpeg.zip.so) so Android's native loader extracts them. They are
+        // NOT real ELF binaries, so llvm-strip (used by AGP 8.6+) fails on them.
+        doNotStrip '**/*.zip.so'
     }
 
     buildTypes {
