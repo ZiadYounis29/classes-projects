@@ -1,8 +1,19 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Needed by youtubedl-android to talk to YouTube / Vimeo / etc. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Foreground service for ongoing downloads so Android doesn't kill us
+         when the screen is off. Used by a future PR; permission is declared
+         here so the manifest is ready when the service lands. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Required on API 33+ for the per-download toast / completion notice. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <application
         android:label="down4more"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:requestLegacyExternalStorage="true"
+        android:extractNativeLibs="true">
         <activity
             android:name=".MainActivity"
             android:exported="true"

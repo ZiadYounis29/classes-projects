@@ -6,12 +6,15 @@ can't run inside an iOS app sandbox).
 
 ## Status
 
-This is **PR 2 of ~10**: the scaffold. The 5-tab shell, navigation, theme
-system, and Settings → Appearance section are live. Actual download logic
-lands in PR 3+.
+Feature parity with the Python prototype has been reached on desktop:
+single-URL, playlist, and batch downloads with quality + format pickers,
+trim, subtitles (embed or sidecar, auto-translate), download history,
+real OS pause/resume, and OS-level toast notifications. Windows packaging
+now ships with a bundled yt-dlp + ffmpeg; the Android backend is the next
+chunk of work.
 
-The Python prototype lives at [`../python/`](../python/) and continues to
-work as a reference until this Flutter version reaches feature parity.
+The Python prototype is archived at
+[`../python/legacy/`](../python/legacy/) for reference.
 
 ## Run on desktop
 
@@ -21,12 +24,50 @@ flutter pub get
 flutter run -d linux       # or: -d macos / -d windows
 ```
 
+On Linux / macOS the app expects `yt-dlp` and `ffmpeg` on `PATH`
+(`apt install yt-dlp ffmpeg` / `brew install yt-dlp ffmpeg`). On
+Windows the installer bundles both — see the [Windows packaging](#windows-packaging)
+section below.
+
 ## Test
 
 ```sh
 flutter analyze            # static analysis
 flutter test               # unit + widget tests
 ```
+
+## Windows packaging
+
+Producing the single-file installer is a three-step flow on a Windows
+machine (or any host with Inno Setup + a working Flutter Windows toolchain):
+
+```powershell
+# 1. Pull the latest yt-dlp.exe + ffmpeg.exe into windows/runner/bin/.
+#    Idempotent — re-run when you want to refresh the bundled binaries.
+pwsh -File tools\fetch_windows_binaries.ps1
+
+# 2. Build the Flutter Windows release. The install step in
+#    windows/CMakeLists.txt automatically copies the binaries from
+#    runner/bin/ next to down4more.exe.
+flutter build windows --release
+
+# 3. Compile the installer (replace the version with whatever you're shipping).
+iscc /DMyAppVersion=0.1.0 tools\windows_installer.iss
+```
+
+The installer ends up under `tools\Output\Down4More-Setup-0.1.0.exe`. It
+installs per-user by default (no admin elevation), drops a Start Menu
+entry, and registers a clean uninstaller.
+
+`tools/fetch_windows_binaries.sh` is the Bash equivalent for Linux/macOS
+hosts that cross-build the Windows installer from CI. Either script
+writes to the same `windows/runner/bin/` directory; the binaries are
+.gitignored and never committed.
+
+At runtime, [`lib/services/external_binary.dart`](./lib/services/external_binary.dart)
+looks for `yt-dlp.exe` / `ffmpeg.exe` next to the running app first, and
+falls back to `PATH` so `flutter run -d windows` dev builds keep working
+without going through the installer flow.
 
 ## Project layout
 

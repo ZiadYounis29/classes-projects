@@ -106,3 +106,16 @@ install(DIRECTORY "${PROJECT_BUILD_DIR}/${FLUTTER_ASSET_DIR_NAME}"
 install(FILES "${AOT_LIBRARY}" DESTINATION "${INSTALL_BUNDLE_DATA_DIR}"
   CONFIGURATIONS Profile;Release
   COMPONENT Runtime)
+
+# Bundle yt-dlp.exe / ffmpeg.exe (and any other helper executables) that the
+# developer dropped into runner/bin/ before building. These are pulled at
+# release time by tools/fetch_windows_binaries.ps1 (or .sh on Linux/macOS
+# dev machines) and copied alongside down4more.exe so that ExternalBinary
+# resolves them at runtime without the user having to install anything.
+# See runner/bin/README.md for the full story.
+file(GLOB BUNDLED_RUNTIME_TOOLS "${CMAKE_CURRENT_SOURCE_DIR}/runner/bin/*.exe")
+if(BUNDLED_RUNTIME_TOOLS)
+  install(FILES ${BUNDLED_RUNTIME_TOOLS}
+    DESTINATION "${CMAKE_INSTALL_PREFIX}"
+    COMPONENT Runtime)
+endif()
