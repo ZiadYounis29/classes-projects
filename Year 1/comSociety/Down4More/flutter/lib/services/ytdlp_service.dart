@@ -9,25 +9,56 @@ import '../models/download_progress.dart';
 import '../models/playlist_entry.dart';
 import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
+import 'external_binary.dart';
 
 /// Thin wrapper around the `yt-dlp` CLI. Pure Dart, no UI deps — safe to
 /// unit-test by injecting a [_ProcessRunner] / [_ProcessSpawner].
 ///
-/// Right now we shell out to whichever `yt-dlp` is on `PATH`. PR 8 will switch
-/// this to a bundled binary that ships inside the app, so the user doesn't
-/// need yt-dlp pre-installed.
+/// On Linux / macOS we shell out to whichever `yt-dlp` / `ffmpeg` is on
+/// `PATH` (apt, brew, etc.). On Windows we look for `yt-dlp.exe` /
+/// `ffmpeg.exe` next to the running app first — the Inno Setup installer
+/// drops them there so users don't have to install anything by hand — and
+/// fall back to `PATH` if the bundled copies are missing (e.g. dev builds).
+/// Path resolution lives in [ExternalBinary].
+///
+/// Tests can bypass [ExternalBinary] entirely by passing explicit
+/// [executable] and [ffmpegExecutable] strings to the constructor.
 class YtDlpService {
   YtDlpService({
-    String executable = 'yt-dlp',
+    String? executable,
+    String? ffmpegExecutable,
     Future<ProcessResult> Function(String, List<String>)? processRunner,
     Future<Process> Function(String, List<String>)? processSpawner,
-  })  : _exe = executable,
+  })  : _exeOverride = executable,
+        _ffmpegOverride = ffmpegExecutable,
         _runner = processRunner ?? _defaultRunner,
         _spawner = processSpawner ?? _defaultSpawner;
 
-  final String _exe;
+  // Explicit overrides take precedence over auto-resolved paths. Tests pass
+  // these so they never hit the disk / never depend on installed binaries.
+  final String? _exeOverride;
+  final String? _ffmpegOverride;
+  // Cached resolved paths. Populated on first use by [_getExe] / [_getFfmpeg].
+  String? _exeResolved;
+  String? _ffmpegResolved;
   final Future<ProcessResult> Function(String, List<String>) _runner;
   final Future<Process> Function(String, List<String>) _spawner;
+
+  /// Resolve the absolute path / command to launch yt-dlp with. Cached after
+  /// the first call so we don't poke the filesystem on every download.
+  Future<String> _getExe() async {
+    final override = _exeOverride;
+    if (override != null) return override;
+    return _exeResolved ??= await ExternalBinary.ytDlp();
+  }
+
+  /// Resolve the absolute path / command to launch ffmpeg with. Same caching
+  /// shape as [_getExe].
+  Future<String> _getFfmpeg() async {
+    final override = _ffmpegOverride;
+    if (override != null) return override;
+    return _ffmpegResolved ??= await ExternalBinary.ffmpeg();
+  }
 
   /// Run `yt-dlp --dump-single-json` to fetch metadata for a single URL.
   ///
@@ -46,12 +77,13 @@ class YtDlpService {
     ];
     final fullArgs = [...args, url];
 
+    final exe = await _getExe();
     final ProcessResult result;
     try {
-      result = await _runner(_exe, fullArgs);
+      result = await _runner(exe, fullArgs);
     } on ProcessException catch (e) {
       throw YtDlpException(
-        'yt-dlp not found at "$_exe". Install it with `pip install yt-dlp` '
+        'yt-dlp not found at "$exe". Install it with `pip install yt-dlp` '
         'or apt/brew. Original error: ${e.message}',
       );
     }
@@ -90,12 +122,13 @@ class YtDlpService {
       url,
     ];
 
+    final exe = await _getExe();
     final ProcessResult result;
     try {
-      result = await _runner(_exe, args);
+      result = await _runner(exe, args);
     } on ProcessException catch (e) {
       throw YtDlpException(
-        'yt-dlp not found at "$_exe". Install it with `pip install yt-dlp` '
+        'yt-dlp not found at "$exe". Install it with `pip install yt-dlp` '
         'or apt/brew. Original error: ${e.message}',
       );
     }
@@ -143,9 +176,10 @@ class YtDlpService {
       '1',
       url,
     ];
+    final exe = await _getExe();
     final ProcessResult result;
     try {
-      result = await _runner(_exe, args);
+      result = await _runner(exe, args);
     } on ProcessException {
       return null;
     }
@@ -277,14 +311,28 @@ class YtDlpService {
     ];
 
     Future<void> run() async {
+      final String exe;
+      try {
+        exe = await _getExe();
+      } on UnsupportedError catch (e) {
+        controller.add(
+          DownloadProgress(
+            phase: DownloadPhase.error,
+            errorMessage: e.message?.toString() ?? e.toString(),
+          ),
+        );
+        await controller.close();
+        processCompleter.completeError(e);
+        return;
+      }
       Process process;
       try {
-        process = await _spawner(_exe, args);
+        process = await _spawner(exe, args);
       } on ProcessException catch (e) {
         controller.add(
           DownloadProgress(
             phase: DownloadPhase.error,
-            errorMessage: 'yt-dlp not found at "$_exe": ${e.message}',
+            errorMessage: 'yt-dlp not found at "$exe": ${e.message}',
           ),
         );
         await controller.close();
@@ -451,7 +499,8 @@ class YtDlpService {
           end: trimEnd,
         );
 
-        final ffResult = await _runner('ffmpeg', ffmpegArgs);
+        final ffmpeg = await _getFfmpeg();
+        final ffResult = await _runner(ffmpeg, ffmpegArgs);
 
         // Rename subtitle sidecar files to match the final trimmed name,
         // then trim their content to the same time window as the video so
