@@ -1,6 +1,12 @@
 package com.ziadyounis.down4more.down4more
 
+import android.content.ContentValues
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import com.yausername.ffmpeg.FFmpeg
 import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
@@ -17,6 +23,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileInputStream
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -82,6 +90,9 @@ class YtDlpPlugin :
             "getInfoSingle" -> handleGetInfoSingle(call, result)
             "startDownload" -> handleStartDownload(call, result)
             "cancelDownload" -> handleCancelDownload(call, result)
+            "exportToMediaStore" -> handleExportToMediaStore(call, result)
+            "openFile" -> handleOpenFile(call, result)
+            "openFolder" -> handleOpenFolder(call, result)
             else -> result.notImplemented()
         }
     }
@@ -268,6 +279,272 @@ class YtDlpPlugin :
         result.success(null)
     }
 
+    // ── MediaStore export ───────────────────────────────────────────────────
+    //
+    // yt-dlp writes into the app's scoped scratch dir (no permission needed).
+    // To make the file user-visible in the gallery / Files app we copy it to
+    // `Movies/Down4More[/<subfolder>]` via MediaStore.Video / MediaStore.Audio.
+    // On API 29+ MediaStore manages the `RELATIVE_PATH` for us. On API 28 and
+    // older the legacy path goes via `Environment.getExternalStoragePublicDirectory`.
+    //
+    // The returned map gives the Dart side:
+    //   - `uri`          : content://media/... (or file://... on legacy)
+    //   - `displayPath`  : user-friendly path like /storage/emulated/0/Movies/Down4More/title.mp4
+
+    private fun handleExportToMediaStore(call: MethodCall, result: MethodChannel.Result) {
+        val srcPath = call.argument<String>("srcPath")
+        val displayName = call.argument<String>("displayName")
+        val mimeType = call.argument<String>("mimeType") ?: "video/mp4"
+        val subfolder = call.argument<String>("subfolder")
+        val isAudio = call.argument<Boolean>("isAudio") ?: false
+
+        if (srcPath.isNullOrBlank() || displayName.isNullOrBlank()) {
+            result.error(ERR_ARG, "srcPath and displayName are required", null); return
+        }
+        val src = File(srcPath)
+        if (!src.exists()) {
+            result.error(ERR_EXPORT, "Source file not found: $srcPath", null); return
+        }
+
+        scope.launch {
+            try {
+                val payload = exportToMediaStore(
+                    src = src,
+                    displayName = displayName,
+                    mimeType = mimeType,
+                    subfolder = subfolder,
+                    isAudio = isAudio,
+                )
+                withContext(Dispatchers.Main) { result.success(payload) }
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    result.error(ERR_EXPORT, t.message ?: "MediaStore export failed", null)
+                }
+            }
+        }
+    }
+
+    private fun exportToMediaStore(
+        src: File,
+        displayName: String,
+        mimeType: String,
+        subfolder: String?,
+        isAudio: Boolean,
+    ): Map<String, Any?> {
+        val rootDir = if (isAudio) {
+            Environment.DIRECTORY_MUSIC
+        } else {
+            Environment.DIRECTORY_MOVIES
+        }
+        val relativeFolder = buildString {
+            append(rootDir).append('/').append("Down4More")
+            if (!subfolder.isNullOrBlank()) {
+                append('/').append(sanitizeRelativePath(subfolder))
+            }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // API 29+: MediaStore owns the file; we never touch the public path
+            // directly. RELATIVE_PATH must end with a slash for the directory.
+            val resolver = context.contentResolver
+            val collection = if (isAudio) {
+                MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            } else {
+                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            }
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "$relativeFolder/")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val itemUri = resolver.insert(collection, values)
+                ?: throw IllegalStateException("MediaStore.insert returned null")
+            try {
+                resolver.openOutputStream(itemUri, "w")?.use { out ->
+                    FileInputStream(src).use { input -> input.copyTo(out) }
+                } ?: throw IllegalStateException("openOutputStream returned null")
+                val finalize = ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }
+                resolver.update(itemUri, finalize, null, null)
+            } catch (t: Throwable) {
+                // Roll back the partially-written MediaStore row so the user
+                // doesn't see a phantom 0-byte file in their gallery.
+                runCatching { resolver.delete(itemUri, null, null) }
+                throw t
+            }
+            // Best-effort cleanup of the scratch copy. Failure here is
+            // cosmetic — the file is already public, the scratch one is just
+            // dead bytes.
+            runCatching { src.delete() }
+            val displayPath = "/storage/emulated/0/$relativeFolder/$displayName"
+            return mapOf(
+                "uri" to itemUri.toString(),
+                "displayPath" to displayPath,
+            )
+        } else {
+            // API ≤ 28: write directly under the public Movies/ folder.
+            // WRITE_EXTERNAL_STORAGE permission is declared in the manifest
+            // with maxSdkVersion="28" so it applies here.
+            @Suppress("DEPRECATION")
+            val publicRoot = Environment.getExternalStoragePublicDirectory(rootDir)
+            val targetDir = File(publicRoot, buildString {
+                append("Down4More")
+                if (!subfolder.isNullOrBlank()) {
+                    append('/').append(sanitizeRelativePath(subfolder))
+                }
+            })
+            if (!targetDir.exists() && !targetDir.mkdirs()) {
+                throw IllegalStateException("Could not create ${targetDir.path}")
+            }
+            val target = File(targetDir, displayName)
+            FileInputStream(src).use { input ->
+                target.outputStream().use { output -> input.copyTo(output) }
+            }
+            runCatching { src.delete() }
+            // Make the MediaStore index pick up the new file so it appears in
+            // the gallery without a reboot.
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DATA, target.absolutePath)
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            }
+            val collection = if (isAudio) {
+                @Suppress("DEPRECATION")
+                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+            } else {
+                @Suppress("DEPRECATION")
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            }
+            val uri = runCatching { context.contentResolver.insert(collection, values) }
+                .getOrNull()
+            return mapOf(
+                "uri" to (uri?.toString() ?: "file://${target.absolutePath}"),
+                "displayPath" to target.absolutePath,
+            )
+        }
+    }
+
+    private fun sanitizeRelativePath(input: String): String {
+        // MediaStore RELATIVE_PATH rejects components with `..` and bare
+        // `/`-prefixed strings. Strip those and any control chars but leave
+        // user-friendly characters (spaces, dashes) alone.
+        return input
+            .replace(Regex("""[\u0000-\u001f]"""), "")
+            .split('/')
+            .map { it.trim().replace("..", "_") }
+            .filter { it.isNotEmpty() }
+            .joinToString("/")
+    }
+
+    // ── open file / folder ──────────────────────────────────────────────────
+    //
+    // The UI's "Open" / "Folder" buttons need to dispatch ACTION_VIEW intents
+    // with content URIs (file:// is blocked since API 24). We accept the
+    // user-friendly /storage/emulated/0/Movies/Down4More/... path and resolve
+    // back to a MediaStore URI for the receiving app.
+
+    private fun handleOpenFile(call: MethodCall, result: MethodChannel.Result) {
+        val path = call.argument<String>("path")
+        if (path.isNullOrBlank()) {
+            result.error(ERR_ARG, "path is required", null); return
+        }
+        try {
+            val uri = resolveContentUri(path)
+            val mime = guessMimeType(path)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, mime)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(intent)
+            result.success(true)
+        } catch (t: Throwable) {
+            result.success(false)
+        }
+    }
+
+    private fun handleOpenFolder(call: MethodCall, result: MethodChannel.Result) {
+        val path = call.argument<String>("path") ?: ""
+        try {
+            // We can't deep-link into a folder the way desktop file managers
+            // do — Android's storage UI is collection-scoped. The closest
+            // analogue is ACTION_VIEW on a directory-style URI which most
+            // gallery / Files apps treat as "show the parent collection".
+            val parent = if (path.isNotBlank()) {
+                File(path).parentFile?.absolutePath ?: path
+            } else {
+                Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_MOVIES,
+                ).absolutePath + "/Down4More"
+            }
+            val uri = Uri.parse("content://com.android.externalstorage.documents/document/primary:" +
+                parent.removePrefix("/storage/emulated/0/"))
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "vnd.android.document/directory")
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            context.startActivity(intent)
+            result.success(true)
+        } catch (t: Throwable) {
+            result.success(false)
+        }
+    }
+
+    private fun resolveContentUri(path: String): Uri {
+        // Files we wrote via exportToMediaStore are indexed under
+        // MediaStore.Video / Audio. If MediaStore lookup fails the caller
+        // gets a `file://` URI as a last resort — Android may refuse it on
+        // API 24+ but it lets older viewers still work.
+        val mediaUri = findMediaStoreUri(path)
+        if (mediaUri != null) return mediaUri
+        return Uri.fromFile(File(path))
+    }
+
+    private fun findMediaStoreUri(path: String): Uri? {
+        val collections = listOf(
+            MediaStore.Video.Media.EXTERNAL_CONTENT_URI to MediaStore.Video.Media._ID,
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI to MediaStore.Audio.Media._ID,
+        )
+        for ((collection, idColumn) in collections) {
+            val cursor = runCatching {
+                context.contentResolver.query(
+                    collection,
+                    arrayOf(idColumn),
+                    "${MediaStore.MediaColumns.DATA}=?",
+                    arrayOf(path),
+                    null,
+                )
+            }.getOrNull() ?: continue
+            cursor.use {
+                if (it.moveToFirst()) {
+                    val id = it.getLong(0)
+                    return Uri.withAppendedPath(collection, id.toString())
+                }
+            }
+        }
+        return null
+    }
+
+    private fun guessMimeType(path: String): String {
+        val ext = path.substringAfterLast('.', "").lowercase()
+        return when (ext) {
+            "mp4", "m4v" -> "video/mp4"
+            "mkv" -> "video/x-matroska"
+            "webm" -> "video/webm"
+            "mov" -> "video/quicktime"
+            "mp3" -> "audio/mpeg"
+            "m4a", "aac" -> "audio/aac"
+            "flac" -> "audio/flac"
+            "ogg", "oga" -> "audio/ogg"
+            "opus" -> "audio/opus"
+            "wav" -> "audio/wav"
+            else -> "*/*"
+        }
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     /**
@@ -316,5 +593,6 @@ class YtDlpPlugin :
         private const val ERR_YTDLP = "yt_dlp_failed"
         private const val ERR_CANCELLED = "cancelled"
         private const val ERR_UNKNOWN = "unknown"
+        private const val ERR_EXPORT = "export_failed"
     }
 }
