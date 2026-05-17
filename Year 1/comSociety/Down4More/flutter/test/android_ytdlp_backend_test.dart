@@ -564,4 +564,438 @@ void main() {
       );
     });
   });
+
+  // ── fake pause/resume state machine ──────────────────────────────────
+  //
+  // youtubedl-android exposes no pause primitive, so the backend fakes one
+  // by cancelling the current download and re-issuing `startDownload` with
+  // `--continue` on resume. These tests pin that contract down so the
+  // queue controller can rely on it.
+
+  group('fake pause/resume', () {
+    const methodName = 'down4more/yt_dlp_test_pauseresume';
+    const eventName = 'down4more/yt_dlp_test_pauseresume_events';
+    late AndroidYtDlpBackend backend;
+    late List<MethodCall> calls;
+    late _FakeEventChannel events;
+
+    /// Poll `calls` until at least [n] startDownload calls have arrived.
+    /// Used instead of swapping the mock handler so the cumulative count
+    /// survives across pause / resume cycles.
+    Future<void> waitForStartCount(int n) async {
+      for (var i = 0; i < 100; i++) {
+        final seen = calls.where((c) => c.method == 'startDownload').length;
+        if (seen >= n) return;
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+      }
+      fail('Timed out waiting for $n startDownload calls, '
+          'saw ${calls.where((c) => c.method == "startDownload").length}');
+    }
+
+    setUp(() {
+      calls = [];
+      backend = AndroidYtDlpBackend(
+        methodChannel: const MethodChannel(methodName),
+        eventChannel: const EventChannel(eventName),
+      );
+      events = _FakeEventChannel(eventName)..start();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(methodName),
+              (call) async {
+        calls.add(call);
+        return null;
+      });
+    });
+
+    tearDown(() async {
+      await events.close();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(methodName), null);
+    });
+
+    test(
+        'pause() emits a synthetic paused progress event and cancels the '
+        'underlying yt-dlp call', () async {
+      final handle = backend.download(
+        metadata: testMetadata(),
+        format: testFormat(),
+        outputDir: '/d',
+      );
+      final emitted = <DownloadProgress>[];
+      final sub = handle.stream.listen(emitted.add);
+      await waitForStartCount(1);
+
+      handle.pause();
+      // Let the synthetic event flush through the broadcast controller.
+      await Future<void>.delayed(Duration.zero);
+
+      expect(
+        calls.where((c) => c.method == 'cancelDownload').length,
+        1,
+        reason: 'pause() should request a Kotlin-side cancel',
+      );
+      expect(emitted, isNotEmpty);
+      expect(emitted.last.phase, DownloadPhase.downloading);
+      expect(emitted.last.paused, isTrue);
+
+      // The Kotlin cancelled event that pause() triggered should be
+      // SWALLOWED — the stream stays open so resume can re-attach.
+      final downloadId =
+          (calls.firstWhere((c) => c.method == 'startDownload').arguments
+              as Map)['downloadId'] as String;
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'cancelled',
+      });
+      await Future<void>.delayed(Duration.zero);
+      // No DownloadPhase.cancelled emitted.
+      expect(
+        emitted.where((p) => p.phase == DownloadPhase.cancelled),
+        isEmpty,
+      );
+
+      await sub.cancel();
+      handle.cancel();
+    });
+
+    test(
+        'resume() re-issues startDownload with --continue and a fresh '
+        'downloadId', () async {
+      final handle = backend.download(
+        metadata: testMetadata(),
+        format: testFormat(),
+        outputDir: '/d',
+      );
+      final sub = handle.stream.listen((_) {});
+      await waitForStartCount(1);
+      final initialId = (calls
+          .firstWhere((c) => c.method == 'startDownload')
+          .arguments as Map)['downloadId'] as String;
+
+      handle.pause();
+      await Future<void>.delayed(Duration.zero);
+
+      handle.resume();
+      await waitForStartCount(2);
+
+      final startCalls =
+          calls.where((c) => c.method == 'startDownload').toList();
+      expect(startCalls.length, 2,
+          reason: 'resume should issue a fresh startDownload');
+      final resumeArgs = ((startCalls.last.arguments as Map)['args'] as List)
+          .cast<String>();
+      expect(resumeArgs, contains('--continue'),
+          reason: 'resume must pass --continue so yt-dlp picks up the .part');
+      final resumeId =
+          (startCalls.last.arguments as Map)['downloadId'] as String;
+      expect(resumeId, isNot(equals(initialId)),
+          reason: 'each spawn must use a fresh downloadId');
+
+      await sub.cancel();
+      handle.cancel();
+    });
+
+    test('cancel() while paused emits cancelled synthetically (no double '
+        'Kotlin cancel)', () async {
+      final handle = backend.download(
+        metadata: testMetadata(),
+        format: testFormat(),
+        outputDir: '/d',
+      );
+      final emitted = <DownloadProgress>[];
+      final sub = handle.stream.listen(emitted.add);
+      await waitForStartCount(1);
+
+      handle.pause();
+      await Future<void>.delayed(Duration.zero);
+      final cancelsBefore =
+          calls.where((c) => c.method == 'cancelDownload').length;
+
+      handle.cancel();
+      await Future<void>.delayed(Duration.zero);
+
+      final cancelsAfter =
+          calls.where((c) => c.method == 'cancelDownload').length;
+      expect(cancelsAfter, cancelsBefore,
+          reason:
+              'cancel-while-paused should NOT issue another Kotlin cancel — '
+              'the previous one was already dispatched by pause()');
+      expect(emitted.any((p) => p.phase == DownloadPhase.cancelled), isTrue,
+          reason: 'stream must terminate with a cancelled event');
+      await sub.cancel();
+    });
+  });
+
+  // ── MediaStore export call shape ─────────────────────────────────────
+  //
+  // When a download completes successfully the backend asks the Kotlin
+  // plugin to copy the file from app scratch to Movies/Down4More/... via
+  // MediaStore. These tests pin the call shape so the Kotlin side can rely
+  // on a stable contract.
+
+  group('MediaStore export', () {
+    const methodName = 'down4more/yt_dlp_test_export';
+    const eventName = 'down4more/yt_dlp_test_export_events';
+    late AndroidYtDlpBackend backend;
+    late List<MethodCall> calls;
+    late _FakeEventChannel events;
+    late Completer<void> startCompleter;
+
+    setUp(() {
+      calls = [];
+      startCompleter = Completer<void>();
+      backend = AndroidYtDlpBackend(
+        methodChannel: const MethodChannel(methodName),
+        eventChannel: const EventChannel(eventName),
+      );
+      events = _FakeEventChannel(eventName)..start();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(methodName),
+              (call) async {
+        calls.add(call);
+        if (call.method == 'init') return null;
+        if (call.method == 'startDownload') {
+          if (!startCompleter.isCompleted) startCompleter.complete();
+          return null;
+        }
+        if (call.method == 'exportToMediaStore') {
+          return <String, Object?>{
+            'uri': 'content://media/external/video/media/1234',
+            'displayPath':
+                '/storage/emulated/0/Movies/Down4More/MyPlaylist/Test Video.mp4',
+          };
+        }
+        return null;
+      });
+    });
+
+    tearDown(() async {
+      await events.close();
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(methodName), null);
+    });
+
+    test('completion with outputPath triggers exportToMediaStore with '
+        'derived subfolder', () async {
+      final handle = backend.download(
+        metadata: testMetadata(),
+        format: testFormat(),
+        // Group-folder shape — `MyPlaylist` should become the MediaStore
+        // subfolder.
+        outputDir: '/storage/emulated/0/Movies/Down4More/MyPlaylist',
+      );
+      final drain = handle.stream.toList();
+      await startCompleter.future;
+      final downloadId =
+          (calls.firstWhere((c) => c.method == 'startDownload').arguments
+              as Map)['downloadId'] as String;
+
+      // First emit a progress line that sets outputPath, then completion.
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'progress',
+        'line': '[download] Destination: '
+            '/data/data/com.ziadyounis.down4more/cache/Test Video.mp4',
+      });
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'completed',
+        'exitCode': 0,
+        'stdout': '',
+        'stderr': '',
+      });
+
+      final emitted = await drain;
+      expect(emitted.last.phase, DownloadPhase.finished);
+      expect(emitted.last.outputPath, contains('Movies/Down4More/MyPlaylist'),
+          reason:
+              'finished event should surface the public MediaStore path');
+
+      final exportCall =
+          calls.firstWhere((c) => c.method == 'exportToMediaStore');
+      final args = (exportCall.arguments as Map).cast<String, dynamic>();
+      expect(args['srcPath'],
+          '/data/data/com.ziadyounis.down4more/cache/Test Video.mp4');
+      expect(args['displayName'], 'Test Video.mp4');
+      expect(args['mimeType'], 'video/mp4');
+      expect(args['subfolder'], 'MyPlaylist');
+      expect(args['isAudio'], isFalse);
+    });
+
+    test('outputDir without a Down4More ancestor passes subfolder=null',
+        () async {
+      final handle = backend.download(
+        metadata: testMetadata(),
+        format: testFormat(),
+        outputDir: '/tmp/scratch',
+      );
+      final drain = handle.stream.toList();
+      await startCompleter.future;
+      final downloadId =
+          (calls.firstWhere((c) => c.method == 'startDownload').arguments
+              as Map)['downloadId'] as String;
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'progress',
+        'line': '[download] Destination: /tmp/scratch/x.mp4',
+      });
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'completed',
+        'exitCode': 0,
+        'stdout': '',
+        'stderr': '',
+      });
+      await drain;
+      final exportCall =
+          calls.firstWhere((c) => c.method == 'exportToMediaStore');
+      final args = (exportCall.arguments as Map).cast<String, dynamic>();
+      expect(args['subfolder'], isNull);
+    });
+
+    test('audio format passes isAudio=true and an audio MIME type',
+        () async {
+      final handle = backend.download(
+        metadata: testMetadata(),
+        format: testFormat(audio: true),
+        outputDir: '/storage/emulated/0/Movies/Down4More',
+        outputExt: 'mp3',
+      );
+      final drain = handle.stream.toList();
+      await startCompleter.future;
+      final downloadId =
+          (calls.firstWhere((c) => c.method == 'startDownload').arguments
+              as Map)['downloadId'] as String;
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'progress',
+        'line':
+            '[download] Destination: /data/data/com.ziadyounis.down4more/cache/Test.mp3',
+      });
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'completed',
+        'exitCode': 0,
+        'stdout': '',
+        'stderr': '',
+      });
+      await drain;
+      final exportCall =
+          calls.firstWhere((c) => c.method == 'exportToMediaStore');
+      final args = (exportCall.arguments as Map).cast<String, dynamic>();
+      expect(args['isAudio'], isTrue);
+      expect(args['mimeType'], 'audio/mpeg');
+      expect(args['subfolder'], isNull);
+    });
+
+    test('export failure falls back to the scratch path without crashing',
+        () async {
+      // Override exportToMediaStore to throw — this is the "MediaStore
+      // refused for some reason" case (e.g. quota).
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(methodName),
+              (call) async {
+        calls.add(call);
+        if (call.method == 'init') return null;
+        if (call.method == 'startDownload') {
+          if (!startCompleter.isCompleted) startCompleter.complete();
+          return null;
+        }
+        if (call.method == 'exportToMediaStore') {
+          throw PlatformException(
+            code: 'export_failed',
+            message: 'MediaStore refused',
+          );
+        }
+        return null;
+      });
+
+      final handle = backend.download(
+        metadata: testMetadata(),
+        format: testFormat(),
+        outputDir: '/storage/emulated/0/Movies/Down4More',
+      );
+      final drain = handle.stream.toList();
+      await startCompleter.future;
+      final downloadId =
+          (calls.firstWhere((c) => c.method == 'startDownload').arguments
+              as Map)['downloadId'] as String;
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'progress',
+        'line':
+            '[download] Destination: /data/data/com.ziadyounis.down4more/cache/Test.mp4',
+      });
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'completed',
+        'exitCode': 0,
+        'stdout': '',
+        'stderr': '',
+      });
+      final emitted = await drain;
+      expect(emitted.last.phase, DownloadPhase.finished);
+      expect(emitted.last.outputPath,
+          '/data/data/com.ziadyounis.down4more/cache/Test.mp4',
+          reason: 'export failure surfaces the scratch path');
+    });
+  });
+
+  // ── openFile / openFolder thin wrappers ──────────────────────────────
+
+  group('openFile / openFolder', () {
+    const methodName = 'down4more/yt_dlp_test_open';
+
+    test('openFile invokes the plugin with the given path and forwards the '
+        'boolean result', () async {
+      final calls = <MethodCall>[];
+      final backend = AndroidYtDlpBackend(
+        methodChannel: const MethodChannel(methodName),
+        eventChannel: const EventChannel('test/events_unused'),
+      );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(methodName),
+              (call) async {
+        calls.add(call);
+        if (call.method == 'openFile') return true;
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(const MethodChannel(methodName), null);
+      });
+
+      final ok = await backend.openFile(
+        '/storage/emulated/0/Movies/Down4More/video.mp4',
+      );
+      expect(ok, isTrue);
+      final call = calls.firstWhere((c) => c.method == 'openFile');
+      expect(
+        (call.arguments as Map)['path'],
+        '/storage/emulated/0/Movies/Down4More/video.mp4',
+      );
+    });
+
+    test('openFolder returns false (and does not throw) on PlatformException',
+        () async {
+      final backend = AndroidYtDlpBackend(
+        methodChannel: const MethodChannel(methodName),
+        eventChannel: const EventChannel('test/events_unused'),
+      );
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel(methodName),
+              (call) async {
+        if (call.method == 'openFolder') {
+          throw PlatformException(code: 'no_handler', message: 'nope');
+        }
+        return null;
+      });
+      addTearDown(() {
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(const MethodChannel(methodName), null);
+      });
+
+      expect(await backend.openFolder('/whatever'), isFalse);
+    });
+  });
 }

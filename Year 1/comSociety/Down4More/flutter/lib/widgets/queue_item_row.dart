@@ -374,18 +374,11 @@ class QueueItemRow extends StatelessWidget {
       crossAxisAlignment: WrapCrossAlignment.center,
       children: [
         if (canPause)
-          TextButton.icon(
+          _PauseResumeButton(
+            isPaused: isPaused,
             onPressed: () => isPaused
                 ? queue.resumeItem(item)
                 : queue.pauseItem(item),
-            style: TextButton.styleFrom(
-              visualDensity: VisualDensity.compact,
-            ),
-            icon: Icon(
-              isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
-              size: 16,
-            ),
-            label: Text(isPaused ? 'Resume' : 'Pause'),
           ),
         if (isActive)
           TextButton.icon(
@@ -518,4 +511,45 @@ String _formatDuration(Duration d) {
   final s = d.inSeconds.remainder(60);
   if (h > 0) return '$h:${two(m)}:${two(s)}';
   return '$m:${two(s)}';
+}
+
+/// Pause / Resume button used by the per-row action bar.
+///
+/// On Android the underlying yt-dlp library exposes no pause primitive, so
+/// our [AndroidYtDlpBackend] fakes pause by cancelling the download and
+/// re-issuing it with `--continue` on resume. That has visible
+/// side-effects (speed/ETA reset, any in-progress merge restarts) that
+/// users won't infer from a generic pause icon — so we surface them in a
+/// tooltip on Android only.
+class _PauseResumeButton extends StatelessWidget {
+  const _PauseResumeButton({
+    required this.isPaused,
+    required this.onPressed,
+  });
+
+  final bool isPaused;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final button = TextButton.icon(
+      onPressed: onPressed,
+      style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+      icon: Icon(
+        isPaused ? Icons.play_arrow_rounded : Icons.pause_rounded,
+        size: 16,
+      ),
+      label: Text(isPaused ? 'Resume' : 'Pause'),
+    );
+    if (!Platform.isAndroid) return button;
+    return Tooltip(
+      message: isPaused
+          ? 'Resuming on Android continues from the partial file.\n'
+              'Speed and ETA reset until enough samples accumulate.'
+          : 'On Android, pause stops yt-dlp and resumes from the partial\n'
+              'file. Speed/ETA reset and any in-progress merge restarts.',
+      waitDuration: const Duration(milliseconds: 300),
+      child: button,
+    );
+  }
 }
