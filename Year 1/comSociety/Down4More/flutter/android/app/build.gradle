@@ -22,12 +22,30 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "com.ziadyounis.down4more.down4more"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // youtubedl-android 0.18.x requires minSdk 24 (Android 7.0 Nougat).
+        // We pin minSdk here rather than rely on flutter.minSdkVersion so
+        // the build fails fast on incompatible defaults.
+        minSdk = Math.max(24, flutter.minSdkVersion as int)
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // youtubedl-android ships a bundled Python interpreter as native
+        // libraries; we ship only the four ABIs the library supports.
+        // Without this filter the build pulls in an empty `armeabi` folder
+        // and gets rejected by Play Store as an "incomplete native library".
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        }
+    }
+
+    // youtubedl-android needs the bundled Python interpreter + yt-dlp
+    // executable to be extractable at runtime. AGP 7+ defaults extractNativeLibs
+    // to false, so we re-enable it for our app.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
     }
 
     buildTypes {
@@ -41,4 +59,17 @@ android {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    // youtubedl-android bundles a Python interpreter + yt-dlp executable so we
+    // can spawn downloads from native code on Android, where the desktop
+    // approach of shelling out to a system `yt-dlp` binary is impossible.
+    // See https://github.com/yausername/youtubedl-android.
+    def youtubedlAndroidVersion = "0.18.1"
+    implementation "io.github.junkfood02.youtubedl-android:library:$youtubedlAndroidVersion"
+    implementation "io.github.junkfood02.youtubedl-android:ffmpeg:$youtubedlAndroidVersion"
+
+    // Coroutines for the background-thread executor we run downloads on.
+    implementation "org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3"
 }

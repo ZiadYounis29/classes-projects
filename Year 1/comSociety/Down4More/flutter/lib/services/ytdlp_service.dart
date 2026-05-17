@@ -886,6 +886,44 @@ class DownloadHandle {
         _onPause  = onPause,
         _onResume = onResume;
 
+  /// Wrap an externally-managed progress [Stream] into a handle the
+  /// controllers can listen to. Used by non-process backends (e.g.
+  /// [AndroidYtDlpBackend] talking to youtubedl-android through a
+  /// platform channel) that emit [DownloadProgress] events through their
+  /// own stream rather than by spawning a child process.
+  ///
+  /// [onCancel] / [onPause] / [onResume] are wired straight through to
+  /// the backend so the UI's existing buttons work. The [processFuture]
+  /// is a placeholder that always errors — callers should treat this
+  /// handle as stream-only.
+  factory DownloadHandle.streamed({
+    required Stream<DownloadProgress> stream,
+    required void Function() onCancel,
+    void Function()? onPause,
+    void Function()? onResume,
+  }) {
+    final processCompleter = Completer<Process>();
+    // Never let the unfulfilled processFuture log as an unhandled error.
+    processCompleter.future.catchError((_) => Process.start('true', const []));
+    scheduleMicrotask(() {
+      if (!processCompleter.isCompleted) {
+        processCompleter.completeError(
+          UnsupportedError(
+            'This DownloadHandle has no host Process — the underlying '
+            'backend exposes progress only through a stream.',
+          ),
+        );
+      }
+    });
+    return DownloadHandle._(
+      stream: stream,
+      processFuture: processCompleter.future,
+      onCancel: onCancel,
+      onPause: onPause ?? () {},
+      onResume: onResume ?? () {},
+    );
+  }
+
   /// Synthesise a handle that emits a single error event and then closes.
   /// Used by stub backends (e.g. [AndroidBackendStub]) that can't actually
   /// kick off a download but still need to drive the UI's existing
@@ -1060,7 +1098,9 @@ class YtDlpException implements Exception {
 /// - `[download] Destination: /path/to/file.mp4`
 /// - `[Merger] Merging formats into "/path/to/file.mp4"`
 /// - `[ExtractAudio] Destination: /path/to/file.m4a`
-@visibleForTesting
+///
+/// Public so cross-platform backends (e.g. [AndroidYtDlpBackend]) can share
+/// the same parser — yt-dlp's progress lines are identical on every host.
 DownloadProgress? parseProgressLine(String line) {
   final trimmed = line.trim();
   if (trimmed.isEmpty) return null;
