@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import '../models/subtitle_settings.dart';
 import '../settings/app_settings.dart';
 import '../theme/theme_controller.dart';
+import '../widgets/bidi_text_field.dart';
 import '../widgets/theme_picker.dart';
 
 class SettingsScreen extends StatelessWidget {
@@ -468,7 +469,7 @@ class _FolderInputDialogState extends State<_FolderInputDialog> {
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),
-            TextField(
+            BidiTextField(
               controller: _ctrl,
               autofocus: true,
               onSubmitted: (_) => _submit(),
@@ -870,7 +871,7 @@ class _SubtitleLanguageTileState extends State<_SubtitleLanguageTile> {
           ),
           if (selected == _other) ...[
             const SizedBox(height: 8),
-            TextField(
+            BidiTextField(
               controller: _customCtrl,
               decoration: const InputDecoration(
                 labelText: 'IETF language tag',

@@ -7,6 +7,7 @@ import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
 import '../services/download_history.dart';
 import '../settings/app_settings.dart';
+import '../widgets/bidi_text_field.dart';
 import '../widgets/queue_item_row.dart';
 import '../widgets/format_dropdown.dart' show formatBytes;
 import '../widgets/subtitle_input.dart';
@@ -361,7 +362,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     return Row(
       children: [
         Expanded(
-          child: TextField(
+          child: BidiTextField(
             controller: _urlCtrl,
             enabled: enabled,
             onSubmitted: (_) => _onFetch(),
@@ -698,7 +699,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
             ),
             if (_groupFolderEnabled) ...[
               const SizedBox(height: 6),
-              TextField(
+              BidiTextField(
                 controller: _folderCtrl,
                 decoration: const InputDecoration(
                   labelText: 'Folder name',

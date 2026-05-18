@@ -60,7 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
   static const List<_NavDestination> _destinations = [
     _NavDestination(Icons.link_outlined,           Icons.link,              'Single'),
     _NavDestination(Icons.list_alt_outlined,        Icons.list_alt,          'Playlist'),
-    _NavDestination(Icons.dynamic_feed_outlined,    Icons.dynamic_feed,      'Batch'),
+    _NavDestination(Icons.layers_outlined,          Icons.layers,            'Batch'),
     _NavDestination(Icons.history_outlined,         Icons.history,           'History'),
     _NavDestination(Icons.folder_open_outlined,     Icons.folder_open,       'My Files'),
     _NavDestination(Icons.settings_outlined,        Icons.settings,          'Settings'),
