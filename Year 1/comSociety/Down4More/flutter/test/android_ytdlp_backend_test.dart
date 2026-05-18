@@ -408,7 +408,7 @@ void main() {
       await drain;
     });
 
-    test('trim downloads full file (no --download-sections) and uses temp name',
+    test('trim uses --download-sections without --force-keyframes-at-cuts',
         () async {
       final handle = backend.download(
         metadata: testMetadata(),
@@ -423,13 +423,15 @@ void main() {
           ((calls.firstWhere((c) => c.method == 'startDownload').arguments
                   as Map)['args'] as List)
               .cast<String>();
-      // On Android, trim is handled post-download with ffmpeg, so
-      // --download-sections and --force-keyframes-at-cuts must NOT appear.
-      expect(args, isNot(contains('--download-sections')));
+      expect(
+        args,
+        containsAllInOrder([
+          '--download-sections',
+          '*00:00:05-00:01:30',
+        ]),
+      );
+      // --force-keyframes-at-cuts causes failures on Android, must NOT appear.
       expect(args, isNot(contains('--force-keyframes-at-cuts')));
-      // A temp filename should be used instead of the normal template.
-      final outputArg = args[args.indexOf('-o') + 1];
-      expect(outputArg, contains('_d4m_trim_temp_'));
 
       events.emit(<String, dynamic>{
         'downloadId': (calls

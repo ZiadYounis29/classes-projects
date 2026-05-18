@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show File;
 
 import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
@@ -22,10 +21,10 @@ import 'ytdlp_service.dart' show parseProgressLine;
 ///
 /// - **No subprocesses.** Every call goes through a [MethodChannel] /
 ///   [EventChannel] pair the plugin exposes.
-/// - **Trim** (`trimStart` / `trimEnd`) downloads the full file first,
-///   then runs ffmpeg via the plugin's `runFfmpeg` method to cut the
-///   requested segment. This mirrors the desktop backend's approach
-///   because `--download-sections` doesn't work reliably on Android.
+/// - **Trim** (`trimStart` / `trimEnd`) uses yt-dlp's built-in
+///   `--download-sections` flag (without `--force-keyframes-at-cuts`
+///   which causes failures on Android). The cuts snap to the nearest
+///   keyframe instead of being frame-accurate, but the download works.
 /// - **Fake pause/resume.** The library exposes no pause primitive, so
 ///   `pause()` calls `cancelDownload` and stashes the args + downloadId;
 ///   `resume()` re-issues `startDownload` with `--continue` appended so
@@ -248,17 +247,10 @@ class AndroidYtDlpBackend implements DownloadBackend {
   }) {
     final isAudio = format.isAudioOnly;
     final ytdlpAudioFmt = outputExt == 'ogg' ? 'vorbis' : outputExt;
-    final isTrimming = trimStart != null || trimEnd != null;
-    final String effectiveTemplate;
-    if (isTrimming) {
-      // Download to a temp file; we'll ffmpeg-trim to the final name after.
-      effectiveTemplate =
-          '_d4m_trim_temp_${DateTime.now().millisecondsSinceEpoch}.%(ext)s';
-    } else if (customFilename != null && customFilename.isNotEmpty) {
-      effectiveTemplate = '${_sanitizeFilename(customFilename)}.%(ext)s';
-    } else {
-      effectiveTemplate = outputTemplate;
-    }
+    final effectiveTemplate = (customFilename != null &&
+            customFilename.isNotEmpty)
+        ? '${_sanitizeFilename(customFilename)}.%(ext)s'
+        : outputTemplate;
 
     final subtitleArgs = <String>[];
     if (subtitles != null &&
@@ -290,8 +282,15 @@ class AndroidYtDlpBackend implements DownloadBackend {
       }
     }
 
-    // Trim is handled as a post-download ffmpeg step on Android
-    // (--download-sections doesn't work reliably with youtubedl-android).
+    final trimArgs = <String>[];
+    if (trimStart != null || trimEnd != null) {
+      final start = trimStart ?? Duration.zero;
+      final end = trimEnd ?? metadata.duration;
+      final range = end == null
+          ? '*${_formatTrim(start)}-'
+          : '*${_formatTrim(start)}-${_formatTrim(end)}';
+      trimArgs.addAll(['--download-sections', range]);
+    }
 
     return <String>[
       '--newline',
@@ -305,29 +304,11 @@ class AndroidYtDlpBackend implements DownloadBackend {
       if (rateLimit != null && rateLimit.isNotEmpty)
         ...['--rate-limit', rateLimit],
       ...subtitleArgs,
+      ...trimArgs,
       '-o', p.join(outputDir, effectiveTemplate),
       ...extraArgs,
       metadata.url,
     ];
-  }
-
-  /// Run an ffmpeg command via the plugin. Returns the result map with
-  /// `exitCode`, `stdout`, `stderr`. Throws on platform errors.
-  Future<Map<String, dynamic>> _runFfmpeg(List<String> args) async {
-    final result = await _method.invokeMapMethod<dynamic, dynamic>(
-      'runFfmpeg',
-      <String, dynamic>{'args': args},
-    );
-    if (result == null) {
-      return <String, dynamic>{
-        'exitCode': -1,
-        'stdout': '',
-        'stderr': 'No result from ffmpeg',
-      };
-    }
-    return result.map<String, dynamic>(
-      (k, v) => MapEntry(k.toString(), v),
-    );
   }
 
   Future<Map<String, dynamic>?> _exportToMediaStore({
@@ -696,7 +677,11 @@ class _DownloadSession {
       _speedBytesPerSecond =
           parsed.speedBytesPerSecond ?? _speedBytesPerSecond;
       _eta = parsed.eta ?? _eta;
-      _outputPath = parsed.outputPath ?? _outputPath;
+      // Only update _outputPath for media files — skip subtitle extensions
+      // so a later "Destination: file.srt" doesn't overwrite the video path.
+      if (parsed.outputPath != null && !_isSubtitleExt(parsed.outputPath!)) {
+        _outputPath = parsed.outputPath;
+      }
       if (!_controller.isClosed && !_paused) _controller.add(parsed);
       return;
     }
@@ -739,93 +724,10 @@ class _DownloadSession {
       }
       return;
     }
-
-    // ── Post-download ffmpeg trim (when start/end was requested) ──────
-    final isTrimming = trimStart != null || trimEnd != null;
-    String? finalPath = _outputPath;
-
-    if (isTrimming && finalPath != null && finalPath.isNotEmpty) {
-      if (!_controller.isClosed) {
-        _controller.add(const DownloadProgress(
-          phase: DownloadPhase.trimming,
-          message: 'Trimming segment with ffmpeg\u2026',
-        ));
-      }
-
-      final tempExt = p.extension(finalPath); // includes the dot
-      final String finalName;
-      if (customFilename != null && customFilename!.isNotEmpty) {
-        finalName = AndroidYtDlpBackend._sanitizeFilename(customFilename!);
-      } else {
-        final safeTitle =
-            AndroidYtDlpBackend._sanitizeFilename(metadata.title);
-        final startStr =
-            _formatTrimLabel(trimStart ?? Duration.zero);
-        final endStr = _formatTrimLabel(
-            trimEnd ?? metadata.duration ?? Duration.zero);
-        finalName = '$safeTitle [$startStr-$endStr]';
-      }
-      final trimmedPath = p.join(outputDir, '$finalName$tempExt');
-
-      // Build ffmpeg args: -i input -ss start [-to end] -c copy output
-      final ffArgs = <String>[
-        '-i', finalPath,
-        '-ss', AndroidYtDlpBackend._formatTrim(trimStart ?? Duration.zero),
-        if (trimEnd != null)
-          ...[ '-to', AndroidYtDlpBackend._formatTrim(trimEnd!)],
-        '-c', 'copy',
-        '-y',
-        trimmedPath,
-      ];
-
-      try {
-        final ffResult = await backend._runFfmpeg(ffArgs);
-        final ffExit = (ffResult['exitCode'] as num?)?.toInt() ?? -1;
-
-        // Delete the temp file regardless of outcome.
-        try {
-          final tempFile = File(finalPath);
-          if (tempFile.existsSync()) tempFile.deleteSync();
-        } catch (_) {}
-
-        if (ffExit != 0) {
-          final ffErr =
-              (ffResult['stderr'] as String?)?.trim() ?? '';
-          if (!_controller.isClosed) {
-            _controller.add(DownloadProgress(
-              phase: DownloadPhase.error,
-              errorMessage: ffErr.isEmpty
-                  ? 'ffmpeg exited with code $ffExit.'
-                  : ffErr,
-            ));
-            await _controller.close();
-          }
-          return;
-        }
-        finalPath = trimmedPath;
-      } catch (e) {
-        // Delete temp on failure too.
-        try {
-          if (finalPath != null) {
-            final tempFile = File(finalPath);
-            if (tempFile.existsSync()) tempFile.deleteSync();
-          }
-        } catch (_) {}
-        if (!_controller.isClosed) {
-          _controller.add(DownloadProgress(
-            phase: DownloadPhase.error,
-            errorMessage: 'ffmpeg trim failed: $e',
-          ));
-          await _controller.close();
-        }
-        return;
-      }
-    }
-
     _finished = true;
     // Best-effort MediaStore export. If it fails the user still has the
     // file in the app's scratch dir, which we surface as outputPath.
-    final scratchPath = finalPath;
+    final scratchPath = _outputPath;
     String publicPath = scratchPath ?? '';
     if (scratchPath != null && scratchPath.isNotEmpty) {
       final exported = await backend._exportToMediaStore(
@@ -847,14 +749,6 @@ class _DownloadSession {
       ));
       await _controller.close();
     }
-  }
-
-  static String _formatTrimLabel(Duration d) {
-    final h = d.inHours;
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    if (h > 0) return '${h}h${m}m${s}s';
-    return '${m}m${s}s';
   }
 
   void _handleError(Map<String, dynamic> event) {
@@ -880,6 +774,16 @@ class _DownloadSession {
     if (_controller.isClosed) return;
     _controller.add(const DownloadProgress(phase: DownloadPhase.cancelled));
     _controller.close();
+  }
+
+  static const _subtitleExts = {
+    'srt', 'vtt', 'ass', 'ssa', 'sub', 'lrc', 'ttml', 'srv1', 'srv2', 'srv3',
+    'json3',
+  };
+
+  static bool _isSubtitleExt(String path) {
+    final ext = p.extension(path).toLowerCase().replaceFirst('.', '');
+    return _subtitleExts.contains(ext);
   }
 
   String _mimeTypeFor(String path) {

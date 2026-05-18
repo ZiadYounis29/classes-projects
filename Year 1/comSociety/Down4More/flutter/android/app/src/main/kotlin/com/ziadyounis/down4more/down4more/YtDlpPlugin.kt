@@ -93,7 +93,6 @@ class YtDlpPlugin :
             "getInfoSingle" -> handleGetInfoSingle(call, result)
             "startDownload" -> handleStartDownload(call, result)
             "cancelDownload" -> handleCancelDownload(call, result)
-            "runFfmpeg" -> handleRunFfmpeg(call, result)
             "exportToMediaStore" -> handleExportToMediaStore(call, result)
             "openFile" -> handleOpenFile(call, result)
             "openFolder" -> handleOpenFolder(call, result)
@@ -296,59 +295,6 @@ class YtDlpPlugin :
         downloadJobs.remove(downloadId)
         emitOnMain(mapOf("downloadId" to downloadId, "type" to "cancelled"))
         result.success(null)
-    }
-
-    // ── ffmpeg ─────────────────────────────────────────────────────────────
-
-    private fun handleRunFfmpeg(call: MethodCall, result: MethodChannel.Result) {
-        val args = call.argument<List<String>>("args") ?: emptyList()
-        scope.launch {
-            try {
-                ensureInitialized()
-                val ffmpegBin = findFfmpegBinary()
-                    ?: throw Exception("ffmpeg binary not found")
-
-                val cmd = mutableListOf(ffmpegBin.absolutePath)
-                cmd.addAll(args)
-
-                val process = ProcessBuilder(cmd)
-                    .redirectErrorStream(false)
-                    .start()
-
-                val stdout = process.inputStream.bufferedReader().readText()
-                val stderr = process.errorStream.bufferedReader().readText()
-                val exitCode = process.waitFor()
-
-                withContext(Dispatchers.Main) {
-                    result.success(
-                        mapOf(
-                            "exitCode" to exitCode,
-                            "stdout" to stdout,
-                            "stderr" to stderr,
-                        ),
-                    )
-                }
-            } catch (e: Exception) {
-                withContext(Dispatchers.Main) {
-                    result.error(ERR_UNKNOWN, e.message ?: "ffmpeg failed", null)
-                }
-            }
-        }
-    }
-
-    private fun findFfmpegBinary(): File? {
-        val searchDirs = listOf(
-            File(context.noBackupFilesDir, "youtubedl-android"),
-            context.noBackupFilesDir,
-            context.filesDir,
-        )
-        for (dir in searchDirs) {
-            if (!dir.exists()) continue
-            dir.walkTopDown().forEach { file ->
-                if (file.name == "ffmpeg" && file.canExecute()) return file
-            }
-        }
-        return null
     }
 
     // ── MediaStore export ───────────────────────────────────────────────────
