@@ -504,6 +504,7 @@ class _DownloadSession {
   bool _paused = false;
   bool _cancelled = false;
   bool _finished = false;
+  bool _merging = false;
 
   Stream<DownloadProgress> get stream => _controller.stream;
 
@@ -668,6 +669,12 @@ class _DownloadSession {
     final raw = event['line'] as String?;
     final parsed = raw == null ? null : parseProgressLine(raw);
     if (parsed != null) {
+      // Detect the [Merger] line and lock to the merging state so
+      // subsequent numeric-only callbacks don't overwrite the message.
+      if (parsed.message != null &&
+          parsed.message!.startsWith('Merging')) {
+        _merging = true;
+      }
       _lastPercent = parsed.percent ?? _lastPercent;
       _totalBytes = parsed.totalBytes ?? _totalBytes;
       _speedBytesPerSecond =
@@ -677,10 +684,16 @@ class _DownloadSession {
       if (!_controller.isClosed && !_paused) _controller.add(parsed);
       return;
     }
+    // Once merging has started, suppress the numeric-only fallback events
+    // so the "Merging audio + video…" message stays visible.
+    if (_merging) return;
     // No parseable line — fall back to the numeric percent / eta the
     // library callback gave us directly so the UI's progress bar still
     // ticks even when yt-dlp's stdout is silent.
     final percent = (event['percent'] as num?)?.toDouble() ?? _lastPercent;
+    // Filter out negative percentages (the library reports -1 before any
+    // real progress is available).
+    if (percent < 0) return;
     final etaSec = (event['etaSeconds'] as num?)?.toInt();
     _lastPercent = percent;
     if (etaSec != null && etaSec > 0) _eta = Duration(seconds: etaSec);

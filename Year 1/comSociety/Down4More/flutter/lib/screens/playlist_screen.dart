@@ -710,29 +710,37 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
               ),
             ],
             const SizedBox(height: 16),
-            Row(
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 TextButton.icon(
                   onPressed: _onBackToSelection,
                   icon: const Icon(Icons.arrow_back),
                   label: const Text('Back to selection'),
                 ),
-                const Spacer(),
-                if (totalSizeLabel != null) ...[
-                  Text(
-                    totalSizeLabel,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w500,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (totalSizeLabel != null) ...[
+                      Text(
+                        totalSizeLabel,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+                    FilledButton.icon(
+                      onPressed:
+                          _previewing || total == 0 ? null : _onStartDownload,
+                      icon: const Icon(Icons.download_rounded),
+                      label: Text('Download $total items'),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                ],
-                FilledButton.icon(
-                  onPressed:
-                      _previewing || total == 0 ? null : _onStartDownload,
-                  icon: const Icon(Icons.download_rounded),
-                  label: Text('Download $total items'),
+                  ],
                 ),
               ],
             ),

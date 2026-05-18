@@ -102,20 +102,28 @@ class YtDlpPlugin :
 
     // ── init ────────────────────────────────────────────────────────────────
 
+    @Volatile
+    private var ytDlpUpdated = false
+
     private fun ensureInitialized() {
         if (initialized) return
         synchronized(this) {
             if (initialized) return
             YoutubeDL.getInstance().init(context)
             FFmpeg.getInstance().init(context)
-            // Update yt-dlp to the latest version so YouTube's anti-bot
-            // measures (HTTP 403) are handled by the newest extractors.
-            // Wrapped in try-catch: if the update fails (no network, etc.)
-            // we fall back to the bundled version.
-            try {
-                YoutubeDL.getInstance().updateYoutubeDL(context, UpdateChannel.STABLE)
-            } catch (_: Throwable) { /* update failed — use bundled version */ }
             initialized = true
+        }
+        // Kick off a background yt-dlp update so the newest extractors are
+        // available. Runs outside the synchronized block so it doesn't slow
+        // down init — the bundled version works for the first operation while
+        // the update downloads in the background.
+        if (!ytDlpUpdated) {
+            scope.launch {
+                try {
+                    YoutubeDL.getInstance().updateYoutubeDL(context, UpdateChannel.STABLE)
+                } catch (_: Throwable) { /* update failed — use bundled version */ }
+                ytDlpUpdated = true
+            }
         }
     }
 
