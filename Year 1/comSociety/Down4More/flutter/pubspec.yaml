@@ -47,6 +47,7 @@ dependencies:
   # start, on Android it uses ACTION_VIEW intents.
   url_launcher: ^6.3.1
   path: ^1.9.0
+  permission_handler: ^12.0.1
 
 dev_dependencies:
   flutter_test:
@@ -58,6 +59,31 @@ dev_dependencies:
   # package. See that file for information about deactivating specific lint
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
+
+# ── App-icon generation ──────────────────────────────────────────────────────
+# Regenerates platform-specific launcher icons from the master 1024×1024 PNG
+# at `assets/icon/d4m-1024.png`. Run with:
+#   dart run flutter_launcher_icons
+# Outputs are committed to the repo (Android mipmaps, Windows .ico, macOS
+# AppIcon.appiconset). Update the master image and re-run to roll a new icon.
+flutter_launcher_icons:
+  image_path: "assets/icon/d4m-1024.png"
+  android: "ic_launcher"
+  adaptive_icon_background: "#0E1F36"
+  adaptive_icon_foreground: "assets/icon/d4m-1024.png"
+  min_sdk_android: 24
+  remove_alpha_ios: true
+  ios: false
+  web:
+    generate: false
+  windows:
+    generate: true
+    image_path: "assets/icon/d4m-1024.png"
+    icon_size: 256
+  macos:
+    generate: true
+    image_path: "assets/icon/d4m-1024.png"
+  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec

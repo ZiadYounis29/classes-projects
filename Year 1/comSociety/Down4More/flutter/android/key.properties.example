@@ -1,0 +1,18 @@
+# ── Down4More Android release-signing template ──────────────────────────────
+#
+# Copy this file to `android/key.properties` (gitignored) and fill in the
+# four values to sign release builds with your own keystore. If this file is
+# absent or any field is blank, release builds fall back to the debug keys
+# (still installable via sideload, but Play Store rejects them).
+#
+# Generate a keystore once with:
+#   keytool -genkey -v -keystore ~/down4more-release.jks \
+#     -keyalg RSA -keysize 2048 -validity 10000 \
+#     -alias down4more
+#
+# Absolute path to your .jks / .keystore file. Use forward slashes on
+# Windows too — Gradle expands them correctly.
+storeFile=/absolute/path/to/down4more-release.jks
+storePassword=replace-me
+keyAlias=down4more
+keyPassword=replace-me

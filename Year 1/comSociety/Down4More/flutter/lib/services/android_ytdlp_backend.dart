@@ -9,6 +9,7 @@ import '../models/playlist_entry.dart';
 import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
 import 'download_backend.dart';
+import 'notification_permission.dart';
 import 'ytdlp_service.dart' show parseProgressLine;
 
 /// Real Android [DownloadBackend] backed by the `youtubedl-android` JVM
@@ -627,6 +628,11 @@ class _DownloadSession {
     unawaited(() async {
       try {
         await backend._ensureInitialized();
+        // Best-effort: ask for POST_NOTIFICATIONS so the foreground-service
+        // notification posted by the Kotlin side actually shows up in the
+        // shade. If the user denies, the service still runs (download
+        // survives screen-off), it just won't be visible.
+        await ensureNotificationPermission();
         await backend._method
             .invokeMethod<void>('startDownload', <String, dynamic>{
           'downloadId': id,
