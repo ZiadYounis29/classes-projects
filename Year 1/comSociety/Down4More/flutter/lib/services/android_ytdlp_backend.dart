@@ -497,6 +497,7 @@ class _DownloadSession {
   double? _speedBytesPerSecond;
   Duration? _eta;
   String? _outputPath;
+  String? _subtitlePath;
 
   bool _paused = false;
   bool _cancelled = false;
@@ -677,10 +678,14 @@ class _DownloadSession {
       _speedBytesPerSecond =
           parsed.speedBytesPerSecond ?? _speedBytesPerSecond;
       _eta = parsed.eta ?? _eta;
-      // Only update _outputPath for media files — skip subtitle extensions
-      // so a later "Destination: file.srt" doesn't overwrite the video path.
-      if (parsed.outputPath != null && !_isSubtitleExt(parsed.outputPath!)) {
-        _outputPath = parsed.outputPath;
+      // Track media and subtitle paths separately so MediaStore export
+      // picks up both, and the video path isn't overwritten by the subtitle.
+      if (parsed.outputPath != null) {
+        if (_isSubtitleExt(parsed.outputPath!)) {
+          _subtitlePath = parsed.outputPath;
+        } else {
+          _outputPath = parsed.outputPath;
+        }
       }
       if (!_controller.isClosed && !_paused) _controller.add(parsed);
       return;
@@ -692,16 +697,18 @@ class _DownloadSession {
     // library callback gave us directly so the UI's progress bar still
     // ticks even when yt-dlp's stdout is silent.
     final percent = (event['percent'] as num?)?.toDouble() ?? _lastPercent;
-    // Filter out negative percentages (the library reports -1 before any
-    // real progress is available).
-    if (percent < 0) return;
+    // The library reports -1% before any real progress is available.
+    // Cap at 0 instead of filtering entirely so the UI still shows
+    // "downloading" during --download-sections (trim) which may not
+    // report standard progress.
+    final effectivePercent = percent < 0 ? 0.0 : percent;
     final etaSec = (event['etaSeconds'] as num?)?.toInt();
-    _lastPercent = percent;
+    _lastPercent = effectivePercent;
     if (etaSec != null && etaSec > 0) _eta = Duration(seconds: etaSec);
     if (_controller.isClosed || _paused) return;
     _controller.add(DownloadProgress(
       phase: DownloadPhase.downloading,
-      percent: percent,
+      percent: effectivePercent,
       totalBytes: _totalBytes,
       speedBytesPerSecond: _speedBytesPerSecond,
       eta: _eta,
@@ -739,6 +746,21 @@ class _DownloadSession {
       );
       if (exported != null) {
         publicPath = (exported['displayPath'] as String?) ?? scratchPath;
+      }
+    }
+    // Also export the subtitle file (if any) so it appears alongside
+    // the video in the user's public folder.
+    if (_subtitlePath != null && _subtitlePath!.isNotEmpty) {
+      try {
+        await backend._exportToMediaStore(
+          srcPath: _subtitlePath!,
+          displayName: p.basename(_subtitlePath!),
+          mimeType: 'application/x-subrip',
+          subfolder: mediaStoreSubfolder,
+          isAudio: false,
+        );
+      } catch (_) {
+        // Subtitle export is best-effort; don't fail the whole download.
       }
     }
     if (!_controller.isClosed) {
