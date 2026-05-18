@@ -60,6 +60,11 @@ dev_dependencies:
   # rules and activating additional ones.
   flutter_lints: ^5.0.0
 
+  # Regenerates platform-specific launcher icons from the master PNG (see the
+  # `flutter_launcher_icons:` config block below). Run `dart run
+  # flutter_launcher_icons` after changing the source image.
+  flutter_launcher_icons: ^0.14.4
+
 # ── App-icon generation ──────────────────────────────────────────────────────
 # Regenerates platform-specific launcher icons from the master 1024×1024 PNG
 # at `assets/icon/d4m-1024.png`. Run with:
@@ -83,7 +88,6 @@ flutter_launcher_icons:
   macos:
     generate: true
     image_path: "assets/icon/d4m-1024.png"
-  flutter_launcher_icons: ^0.14.4
 
 # For information on the generic Dart part of this file, see the
 # following page: https://dart.dev/tools/pub/pubspec
