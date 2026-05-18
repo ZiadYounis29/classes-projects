@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/output_format.dart';
 import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
+import 'bidi_text_field.dart';
 
 /// Expandable card that lets the user opt into downloading subtitles for the
 /// current video. Header shows a master switch + a one-line summary; the
@@ -546,7 +547,7 @@ class _LanguageRowState extends State<_LanguageRow> {
         ),
         if (currentKey == _otherKey) ...[
           const SizedBox(height: 8),
-          TextField(
+          BidiTextField(
             controller: widget.customController,
             enabled: widget.enabled,
             onChanged: (v) => widget.onChanged(v.trim(), isAuto: false),
