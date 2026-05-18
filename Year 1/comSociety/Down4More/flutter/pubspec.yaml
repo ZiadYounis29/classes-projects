@@ -47,6 +47,7 @@ dependencies:
   # start, on Android it uses ACTION_VIEW intents.
   url_launcher: ^6.3.1
   path: ^1.9.0
+  file_picker: ^11.0.2
 
 dev_dependencies:
   flutter_test:
