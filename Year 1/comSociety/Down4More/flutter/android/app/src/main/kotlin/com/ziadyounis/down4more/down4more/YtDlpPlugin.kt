@@ -315,6 +315,12 @@ class YtDlpPlugin :
         val mimeType = call.argument<String>("mimeType") ?: "video/mp4"
         val subfolder = call.argument<String>("subfolder")
         val isAudio = call.argument<Boolean>("isAudio") ?: false
+        // Sidecar files (`.srt`, `.vtt`, ...) need to land in the same folder
+        // as the parent video, but MediaStore.Video / MediaStore.Audio reject
+        // any non-A/V MIME type — so we route them through MediaStore.Files
+        // (API 29+) or write them as plain files without indexing them as
+        // media (API ≤28).
+        val isSidecar = call.argument<Boolean>("isSidecar") ?: false
 
         if (srcPath.isNullOrBlank() || displayName.isNullOrBlank()) {
             result.error(ERR_ARG, "srcPath and displayName are required", null); return
@@ -332,6 +338,7 @@ class YtDlpPlugin :
                     mimeType = mimeType,
                     subfolder = subfolder,
                     isAudio = isAudio,
+                    isSidecar = isSidecar,
                 )
                 withContext(Dispatchers.Main) { result.success(payload) }
             } catch (t: Throwable) {
@@ -348,7 +355,11 @@ class YtDlpPlugin :
         mimeType: String,
         subfolder: String?,
         isAudio: Boolean,
+        isSidecar: Boolean = false,
     ): Map<String, Any?> {
+        // Subtitles ride alongside their parent video. We always use the
+        // parent's root dir (Movies for video, Music for audio) so the .srt
+        // ends up next to the .mp4 / .mp3 the user actually opens.
         val rootDir = if (isAudio) {
             Environment.DIRECTORY_MUSIC
         } else {
@@ -365,10 +376,17 @@ class YtDlpPlugin :
             // API 29+: MediaStore owns the file; we never touch the public path
             // directly. RELATIVE_PATH must end with a slash for the directory.
             val resolver = context.contentResolver
-            val collection = if (isAudio) {
-                MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            } else {
-                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val collection = when {
+                // MediaStore.Files accepts arbitrary MIME types and honours
+                // RELATIVE_PATH the same way as the typed collections, so the
+                // .srt lands inside Movies/Down4More/ next to the .mp4 even
+                // though it isn't a video itself.
+                isSidecar ->
+                    MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                isAudio ->
+                    MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                else ->
+                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
             }
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
@@ -421,24 +439,32 @@ class YtDlpPlugin :
                 target.outputStream().use { output -> input.copyTo(output) }
             }
             runCatching { src.delete() }
-            // Make the MediaStore index pick up the new file so it appears in
-            // the gallery without a reboot.
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DATA, target.absolutePath)
-                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            // Index the file under the MediaStore so the gallery picks it up
+            // without a reboot. Sidecars (`.srt`, ...) skip this — the typed
+            // Audio / Video collections reject non-A/V MIME types and we
+            // already wrote the file to disk so the user can see it.
+            if (!isSidecar) {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DATA, target.absolutePath)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                }
+                val collection = if (isAudio) {
+                    @Suppress("DEPRECATION")
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                } else {
+                    @Suppress("DEPRECATION")
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                }
+                val uri = runCatching { context.contentResolver.insert(collection, values) }
+                    .getOrNull()
+                return mapOf(
+                    "uri" to (uri?.toString() ?: "file://${target.absolutePath}"),
+                    "displayPath" to target.absolutePath,
+                )
             }
-            val collection = if (isAudio) {
-                @Suppress("DEPRECATION")
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-            } else {
-                @Suppress("DEPRECATION")
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            }
-            val uri = runCatching { context.contentResolver.insert(collection, values) }
-                .getOrNull()
             return mapOf(
-                "uri" to (uri?.toString() ?: "file://${target.absolutePath}"),
+                "uri" to "file://${target.absolutePath}",
                 "displayPath" to target.absolutePath,
             )
         }

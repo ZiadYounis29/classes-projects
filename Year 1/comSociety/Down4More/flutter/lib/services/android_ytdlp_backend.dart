@@ -317,6 +317,7 @@ class AndroidYtDlpBackend implements DownloadBackend {
     required String mimeType,
     required String? subfolder,
     required bool isAudio,
+    bool isSidecar = false,
   }) async {
     try {
       final result = await _method.invokeMapMethod<dynamic, dynamic>(
@@ -327,6 +328,10 @@ class AndroidYtDlpBackend implements DownloadBackend {
           'mimeType': mimeType,
           'subfolder': subfolder,
           'isAudio': isAudio,
+          // Subtitles use `MediaStore.Files` instead of MediaStore.Video /
+          // Audio so the .srt actually lands next to its parent video —
+          // the typed collections silently reject non-A/V MIME types.
+          'isSidecar': isSidecar,
         },
       );
       if (result == null) return null;
@@ -491,8 +496,13 @@ class _DownloadSession {
   StreamSubscription<Map<String, dynamic>>? _subscription;
 
   // Sticky progress fields carried forward between progress lines and used
-  // to build the synthetic "paused" progress event.
-  double _lastPercent = 0;
+  // to build the synthetic "paused" progress event. `_lastPercent` is null
+  // until we see real numeric progress so the UI renders an indeterminate
+  // spinner (vs. a stuck-at-0 determinate bar) during phases where yt-dlp
+  // can't report a percent — notably `--download-sections` (trim mode),
+  // where the library hands us `progress = -1` for the lifetime of the
+  // download.
+  double? _lastPercent;
   int? _totalBytes;
   double? _speedBytesPerSecond;
   Duration? _eta;
@@ -696,14 +706,20 @@ class _DownloadSession {
     // No parseable line — fall back to the numeric percent / eta the
     // library callback gave us directly so the UI's progress bar still
     // ticks even when yt-dlp's stdout is silent.
-    final percent = (event['percent'] as num?)?.toDouble() ?? _lastPercent;
-    // The library reports -1% before any real progress is available.
-    // Cap at 0 instead of filtering entirely so the UI still shows
-    // "downloading" during --download-sections (trim) which may not
-    // report standard progress.
-    final effectivePercent = percent < 0 ? 0.0 : percent;
+    final rawPercent = (event['percent'] as num?)?.toDouble();
+    // youtubedl-android reports `progress = -1` before it has any usable
+    // percent (notably for the entire lifetime of a `--download-sections`
+    // run, where yt-dlp delegates to ffmpeg internally). Treat that as
+    // "unknown" — emit `percent: null` so the UI renders an indeterminate
+    // spinner animation rather than a stuck-at-zero determinate bar.
+    final double? effectivePercent;
+    if (rawPercent != null && rawPercent >= 0) {
+      effectivePercent = rawPercent;
+      _lastPercent = rawPercent;
+    } else {
+      effectivePercent = _lastPercent; // null until we see real progress
+    }
     final etaSec = (event['etaSeconds'] as num?)?.toInt();
-    _lastPercent = effectivePercent;
     if (etaSec != null && etaSec > 0) _eta = Duration(seconds: etaSec);
     if (_controller.isClosed || _paused) return;
     _controller.add(DownloadProgress(
@@ -749,15 +765,20 @@ class _DownloadSession {
       }
     }
     // Also export the subtitle file (if any) so it appears alongside
-    // the video in the user's public folder.
+    // the video in the user's public folder. We match the parent video's
+    // `isAudio` flag (so the subtitle lands in Music/Down4More for audio
+    // downloads, Movies/Down4More for video) and set `isSidecar: true` so
+    // the native plugin routes it through MediaStore.Files — the typed
+    // Video / Audio collections reject application/x-subrip outright.
     if (_subtitlePath != null && _subtitlePath!.isNotEmpty) {
       try {
         await backend._exportToMediaStore(
           srcPath: _subtitlePath!,
           displayName: p.basename(_subtitlePath!),
-          mimeType: 'application/x-subrip',
+          mimeType: _subtitleMimeTypeFor(_subtitlePath!),
           subfolder: mediaStoreSubfolder,
-          isAudio: false,
+          isAudio: format.isAudioOnly,
+          isSidecar: true,
         );
       } catch (_) {
         // Subtitle export is best-effort; don't fail the whole download.
@@ -836,6 +857,27 @@ class _DownloadSession {
         return 'audio/wav';
       default:
         return format.isAudioOnly ? 'audio/*' : 'video/*';
+    }
+  }
+
+  /// MIME type for the subtitle sidecar at [path]. Most viewers accept any
+  /// `text/*` but the dedicated `application/x-subrip` is preferable for
+  /// `.srt`, and WebVTT has its own type. Falls back to a generic
+  /// `application/octet-stream` so MediaStore.Files always accepts it.
+  static String _subtitleMimeTypeFor(String path) {
+    final ext = p.extension(path).toLowerCase().replaceFirst('.', '');
+    switch (ext) {
+      case 'srt':
+        return 'application/x-subrip';
+      case 'vtt':
+        return 'text/vtt';
+      case 'ass':
+      case 'ssa':
+        return 'text/x-ssa';
+      case 'lrc':
+        return 'application/x-lrc';
+      default:
+        return 'application/octet-stream';
     }
   }
 }
