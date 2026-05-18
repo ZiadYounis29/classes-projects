@@ -673,9 +673,24 @@ class _DownloadSession {
     }
   }
 
+  /// Length of the requested `--download-sections` segment, or `null` for
+  /// non-trim downloads (or when we can't determine the total — e.g. trim
+  /// to natural end without a fetched video duration). Used to turn
+  /// ffmpeg's `time=` lines into a real percent + ETA so trim-mode
+  /// progress is no longer indeterminate.
+  Duration? get _trimDuration {
+    if (trimStart == null && trimEnd == null) return null;
+    final start = trimStart ?? Duration.zero;
+    final end = trimEnd ?? metadata.duration;
+    if (end == null) return null;
+    final d = end - start;
+    return d.isNegative ? null : d;
+  }
+
   void _handleProgress(Map<String, dynamic> event) {
     final raw = event['line'] as String?;
-    final parsed = raw == null ? null : parseProgressLine(raw);
+    final parsed =
+        raw == null ? null : parseProgressLine(raw, trimDuration: _trimDuration);
     if (parsed != null) {
       // Detect the [Merger] line and lock to the merging state so
       // subsequent numeric-only callbacks don't overwrite the message.
