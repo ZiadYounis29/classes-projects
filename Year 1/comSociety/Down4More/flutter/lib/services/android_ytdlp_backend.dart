@@ -9,6 +9,7 @@ import '../models/playlist_entry.dart';
 import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
 import 'download_backend.dart';
+import 'notification_permission.dart';
 import 'ytdlp_service.dart' show parseProgressLine;
 
 /// Real Android [DownloadBackend] backed by the `youtubedl-android` JVM
@@ -22,9 +23,9 @@ import 'ytdlp_service.dart' show parseProgressLine;
 /// - **No subprocesses.** Every call goes through a [MethodChannel] /
 ///   [EventChannel] pair the plugin exposes.
 /// - **Trim** (`trimStart` / `trimEnd`) uses yt-dlp's built-in
-///   `--download-sections` flag instead of the desktop's
-///   download-to-temp-then-ffmpeg dance, because youtubedl-android already
-///   bundles ffmpeg and `--download-sections` works on it.
+///   `--download-sections` flag (without `--force-keyframes-at-cuts`
+///   which causes failures on Android). The cuts snap to the nearest
+///   keyframe instead of being frame-accurate, but the download works.
 /// - **Fake pause/resume.** The library exposes no pause primitive, so
 ///   `pause()` calls `cancelDownload` and stashes the args + downloadId;
 ///   `resume()` re-issues `startDownload` with `--continue` appended so
@@ -286,13 +287,10 @@ class AndroidYtDlpBackend implements DownloadBackend {
     if (trimStart != null || trimEnd != null) {
       final start = trimStart ?? Duration.zero;
       final end = trimEnd ?? metadata.duration;
-      // `*HH:MM:SS-HH:MM:SS` is yt-dlp's "absolute time range" syntax.
-      // We omit the end side when we don't have a duration; yt-dlp accepts
-      // an open-ended range as "from start to end of stream".
       final range = end == null
           ? '*${_formatTrim(start)}-'
           : '*${_formatTrim(start)}-${_formatTrim(end)}';
-      trimArgs.addAll(['--download-sections', range, '--force-keyframes-at-cuts']);
+      trimArgs.addAll(['--download-sections', range]);
     }
 
     return <String>[
@@ -320,6 +318,7 @@ class AndroidYtDlpBackend implements DownloadBackend {
     required String mimeType,
     required String? subfolder,
     required bool isAudio,
+    bool isSidecar = false,
   }) async {
     try {
       final result = await _method.invokeMapMethod<dynamic, dynamic>(
@@ -330,6 +329,10 @@ class AndroidYtDlpBackend implements DownloadBackend {
           'mimeType': mimeType,
           'subfolder': subfolder,
           'isAudio': isAudio,
+          // Subtitles use `MediaStore.Files` instead of MediaStore.Video /
+          // Audio so the .srt actually lands next to its parent video —
+          // the typed collections silently reject non-A/V MIME types.
+          'isSidecar': isSidecar,
         },
       );
       if (result == null) return null;
@@ -494,16 +497,23 @@ class _DownloadSession {
   StreamSubscription<Map<String, dynamic>>? _subscription;
 
   // Sticky progress fields carried forward between progress lines and used
-  // to build the synthetic "paused" progress event.
-  double _lastPercent = 0;
+  // to build the synthetic "paused" progress event. `_lastPercent` is null
+  // until we see real numeric progress so the UI renders an indeterminate
+  // spinner (vs. a stuck-at-0 determinate bar) during phases where yt-dlp
+  // can't report a percent — notably `--download-sections` (trim mode),
+  // where the library hands us `progress = -1` for the lifetime of the
+  // download.
+  double? _lastPercent;
   int? _totalBytes;
   double? _speedBytesPerSecond;
   Duration? _eta;
   String? _outputPath;
+  String? _subtitlePath;
 
   bool _paused = false;
   bool _cancelled = false;
   bool _finished = false;
+  bool _merging = false;
 
   Stream<DownloadProgress> get stream => _controller.stream;
 
@@ -628,6 +638,11 @@ class _DownloadSession {
     unawaited(() async {
       try {
         await backend._ensureInitialized();
+        // Best-effort: ask for POST_NOTIFICATIONS so the foreground-service
+        // notification posted by the Kotlin side actually shows up in the
+        // shade. If the user denies, the service still runs (download
+        // survives screen-off), it just won't be visible.
+        await ensureNotificationPermission();
         await backend._method
             .invokeMethod<void>('startDownload', <String, dynamic>{
           'downloadId': id,
@@ -664,30 +679,73 @@ class _DownloadSession {
     }
   }
 
+  /// Length of the requested `--download-sections` segment, or `null` for
+  /// non-trim downloads (or when we can't determine the total — e.g. trim
+  /// to natural end without a fetched video duration). Used to turn
+  /// ffmpeg's `time=` lines into a real percent + ETA so trim-mode
+  /// progress is no longer indeterminate.
+  Duration? get _trimDuration {
+    if (trimStart == null && trimEnd == null) return null;
+    final start = trimStart ?? Duration.zero;
+    final end = trimEnd ?? metadata.duration;
+    if (end == null) return null;
+    final d = end - start;
+    return d.isNegative ? null : d;
+  }
+
   void _handleProgress(Map<String, dynamic> event) {
     final raw = event['line'] as String?;
-    final parsed = raw == null ? null : parseProgressLine(raw);
+    final parsed =
+        raw == null ? null : parseProgressLine(raw, trimDuration: _trimDuration);
     if (parsed != null) {
+      // Detect the [Merger] line and lock to the merging state so
+      // subsequent numeric-only callbacks don't overwrite the message.
+      if (parsed.message != null &&
+          parsed.message!.startsWith('Merging')) {
+        _merging = true;
+      }
       _lastPercent = parsed.percent ?? _lastPercent;
       _totalBytes = parsed.totalBytes ?? _totalBytes;
       _speedBytesPerSecond =
           parsed.speedBytesPerSecond ?? _speedBytesPerSecond;
       _eta = parsed.eta ?? _eta;
-      _outputPath = parsed.outputPath ?? _outputPath;
+      // Track media and subtitle paths separately so MediaStore export
+      // picks up both, and the video path isn't overwritten by the subtitle.
+      if (parsed.outputPath != null) {
+        if (_isSubtitleExt(parsed.outputPath!)) {
+          _subtitlePath = parsed.outputPath;
+        } else {
+          _outputPath = parsed.outputPath;
+        }
+      }
       if (!_controller.isClosed && !_paused) _controller.add(parsed);
       return;
     }
+    // Once merging has started, suppress the numeric-only fallback events
+    // so the "Merging audio + video…" message stays visible.
+    if (_merging) return;
     // No parseable line — fall back to the numeric percent / eta the
     // library callback gave us directly so the UI's progress bar still
     // ticks even when yt-dlp's stdout is silent.
-    final percent = (event['percent'] as num?)?.toDouble() ?? _lastPercent;
+    final rawPercent = (event['percent'] as num?)?.toDouble();
+    // youtubedl-android reports `progress = -1` before it has any usable
+    // percent (notably for the entire lifetime of a `--download-sections`
+    // run, where yt-dlp delegates to ffmpeg internally). Treat that as
+    // "unknown" — emit `percent: null` so the UI renders an indeterminate
+    // spinner animation rather than a stuck-at-zero determinate bar.
+    final double? effectivePercent;
+    if (rawPercent != null && rawPercent >= 0) {
+      effectivePercent = rawPercent;
+      _lastPercent = rawPercent;
+    } else {
+      effectivePercent = _lastPercent; // null until we see real progress
+    }
     final etaSec = (event['etaSeconds'] as num?)?.toInt();
-    _lastPercent = percent;
     if (etaSec != null && etaSec > 0) _eta = Duration(seconds: etaSec);
     if (_controller.isClosed || _paused) return;
     _controller.add(DownloadProgress(
       phase: DownloadPhase.downloading,
-      percent: percent,
+      percent: effectivePercent,
       totalBytes: _totalBytes,
       speedBytesPerSecond: _speedBytesPerSecond,
       eta: _eta,
@@ -727,6 +785,26 @@ class _DownloadSession {
         publicPath = (exported['displayPath'] as String?) ?? scratchPath;
       }
     }
+    // Also export the subtitle file (if any) so it appears alongside
+    // the video in the user's public folder. We match the parent video's
+    // `isAudio` flag (so the subtitle lands in Music/Down4More for audio
+    // downloads, Movies/Down4More for video) and set `isSidecar: true` so
+    // the native plugin routes it through MediaStore.Files — the typed
+    // Video / Audio collections reject application/x-subrip outright.
+    if (_subtitlePath != null && _subtitlePath!.isNotEmpty) {
+      try {
+        await backend._exportToMediaStore(
+          srcPath: _subtitlePath!,
+          displayName: p.basename(_subtitlePath!),
+          mimeType: _subtitleMimeTypeFor(_subtitlePath!),
+          subfolder: mediaStoreSubfolder,
+          isAudio: format.isAudioOnly,
+          isSidecar: true,
+        );
+      } catch (_) {
+        // Subtitle export is best-effort; don't fail the whole download.
+      }
+    }
     if (!_controller.isClosed) {
       _controller.add(DownloadProgress(
         phase: DownloadPhase.finished,
@@ -762,6 +840,16 @@ class _DownloadSession {
     _controller.close();
   }
 
+  static const _subtitleExts = {
+    'srt', 'vtt', 'ass', 'ssa', 'sub', 'lrc', 'ttml', 'srv1', 'srv2', 'srv3',
+    'json3',
+  };
+
+  static bool _isSubtitleExt(String path) {
+    final ext = p.extension(path).toLowerCase().replaceFirst('.', '');
+    return _subtitleExts.contains(ext);
+  }
+
   String _mimeTypeFor(String path) {
     final ext = p.extension(path).toLowerCase().replaceFirst('.', '');
     switch (ext) {
@@ -790,6 +878,27 @@ class _DownloadSession {
         return 'audio/wav';
       default:
         return format.isAudioOnly ? 'audio/*' : 'video/*';
+    }
+  }
+
+  /// MIME type for the subtitle sidecar at [path]. Most viewers accept any
+  /// `text/*` but the dedicated `application/x-subrip` is preferable for
+  /// `.srt`, and WebVTT has its own type. Falls back to a generic
+  /// `application/octet-stream` so MediaStore.Files always accepts it.
+  static String _subtitleMimeTypeFor(String path) {
+    final ext = p.extension(path).toLowerCase().replaceFirst('.', '');
+    switch (ext) {
+      case 'srt':
+        return 'application/x-subrip';
+      case 'vtt':
+        return 'text/vtt';
+      case 'ass':
+      case 'ssa':
+        return 'text/x-ssa';
+      case 'lrc':
+        return 'application/x-lrc';
+      default:
+        return 'application/octet-stream';
     }
   }
 }

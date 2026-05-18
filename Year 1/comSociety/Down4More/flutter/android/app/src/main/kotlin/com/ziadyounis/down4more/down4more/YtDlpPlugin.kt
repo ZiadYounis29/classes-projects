@@ -12,6 +12,7 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.YoutubeDLResponse
+import com.yausername.youtubedl_android.YoutubeDL.UpdateChannel
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -23,9 +24,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.os.Handler
+import android.os.Looper
 import java.io.File
 import java.io.FileInputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Flutter plugin that bridges the Dart `AndroidYtDlpBackend` to the
@@ -55,6 +59,14 @@ class YtDlpPlugin :
     private var eventSink: EventChannel.EventSink? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val downloadJobs = ConcurrentHashMap<String, Job>()
+
+    /**
+     * Number of downloads currently in flight. Drives the foreground-service
+     * lifecycle: incremented before `startDownload`, decremented in the
+     * coroutine's `finally`. When this hits zero we stop the service so
+     * Android removes the ongoing notification.
+     */
+    private val activeDownloads = AtomicInteger(0)
 
     @Volatile
     private var initialized = false
@@ -99,6 +111,9 @@ class YtDlpPlugin :
 
     // ── init ────────────────────────────────────────────────────────────────
 
+    @Volatile
+    private var ytDlpUpdated = false
+
     private fun ensureInitialized() {
         if (initialized) return
         synchronized(this) {
@@ -106,6 +121,18 @@ class YtDlpPlugin :
             YoutubeDL.getInstance().init(context)
             FFmpeg.getInstance().init(context)
             initialized = true
+        }
+        // Kick off a background yt-dlp update so the newest extractors are
+        // available. Runs outside the synchronized block so it doesn't slow
+        // down init — the bundled version works for the first operation while
+        // the update downloads in the background.
+        if (!ytDlpUpdated) {
+            scope.launch {
+                try {
+                    YoutubeDL.getInstance().updateYoutubeDL(context, UpdateChannel.STABLE)
+                } catch (_: Throwable) { /* update failed — use bundled version */ }
+                ytDlpUpdated = true
+            }
         }
     }
 
@@ -200,6 +227,13 @@ class YtDlpPlugin :
             result.error(ERR_ARG, "duplicate downloadId: $downloadId", null); return
         }
 
+        // Promote the app to the foreground BEFORE the first download starts
+        // so Android doesn't get a chance to kill us between the launch call
+        // and the coroutine actually running. Subsequent downloads just bump
+        // the active count and reuse the same service.
+        val activeAfter = activeDownloads.incrementAndGet()
+        DownloadForegroundService.start(context, activeAfter)
+
         val job = scope.launch {
             try {
                 ensureInitialized()
@@ -253,12 +287,29 @@ class YtDlpPlugin :
                 )
             } finally {
                 downloadJobs.remove(downloadId)
+                onDownloadFinished()
             }
         }
         downloadJobs[downloadId] = job
         // Acknowledge immediately so the Dart side can start listening on the
         // EventChannel before the first progress tick lands.
         result.success(null)
+    }
+
+    /**
+     * Called whenever a download coroutine exits (success, cancel, or error).
+     * Decrements [activeDownloads]; if the count reaches zero we stop the
+     * foreground service so the ongoing notification clears. If we still
+     * have other downloads in flight we re-fire `start` so the notification
+     * text reflects the new count.
+     */
+    private fun onDownloadFinished() {
+        val remaining = activeDownloads.updateAndGet { (it - 1).coerceAtLeast(0) }
+        if (remaining == 0) {
+            DownloadForegroundService.stop(context)
+        } else {
+            DownloadForegroundService.start(context, remaining)
+        }
     }
 
     private fun handleCancelDownload(call: MethodCall, result: MethodChannel.Result) {
@@ -273,6 +324,8 @@ class YtDlpPlugin :
             // already-cancelled and emit a synthetic cancelled event so the
             // Dart side's stream still terminates.
         }
+        // Cancelling the coroutine triggers its `finally` block which calls
+        // onDownloadFinished(); we don't have to bump the counter here.
         downloadJobs[downloadId]?.cancel()
         downloadJobs.remove(downloadId)
         emitOnMain(mapOf("downloadId" to downloadId, "type" to "cancelled"))
@@ -297,6 +350,12 @@ class YtDlpPlugin :
         val mimeType = call.argument<String>("mimeType") ?: "video/mp4"
         val subfolder = call.argument<String>("subfolder")
         val isAudio = call.argument<Boolean>("isAudio") ?: false
+        // Sidecar files (`.srt`, `.vtt`, ...) need to land in the same folder
+        // as the parent video, but MediaStore.Video / MediaStore.Audio reject
+        // any non-A/V MIME type — so we route them through MediaStore.Files
+        // (API 29+) or write them as plain files without indexing them as
+        // media (API ≤28).
+        val isSidecar = call.argument<Boolean>("isSidecar") ?: false
 
         if (srcPath.isNullOrBlank() || displayName.isNullOrBlank()) {
             result.error(ERR_ARG, "srcPath and displayName are required", null); return
@@ -314,6 +373,7 @@ class YtDlpPlugin :
                     mimeType = mimeType,
                     subfolder = subfolder,
                     isAudio = isAudio,
+                    isSidecar = isSidecar,
                 )
                 withContext(Dispatchers.Main) { result.success(payload) }
             } catch (t: Throwable) {
@@ -330,7 +390,11 @@ class YtDlpPlugin :
         mimeType: String,
         subfolder: String?,
         isAudio: Boolean,
+        isSidecar: Boolean = false,
     ): Map<String, Any?> {
+        // Subtitles ride alongside their parent video. We always use the
+        // parent's root dir (Movies for video, Music for audio) so the .srt
+        // ends up next to the .mp4 / .mp3 the user actually opens.
         val rootDir = if (isAudio) {
             Environment.DIRECTORY_MUSIC
         } else {
@@ -347,10 +411,17 @@ class YtDlpPlugin :
             // API 29+: MediaStore owns the file; we never touch the public path
             // directly. RELATIVE_PATH must end with a slash for the directory.
             val resolver = context.contentResolver
-            val collection = if (isAudio) {
-                MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-            } else {
-                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+            val collection = when {
+                // MediaStore.Files accepts arbitrary MIME types and honours
+                // RELATIVE_PATH the same way as the typed collections, so the
+                // .srt lands inside Movies/Down4More/ next to the .mp4 even
+                // though it isn't a video itself.
+                isSidecar ->
+                    MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                isAudio ->
+                    MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                else ->
+                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
             }
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
@@ -403,24 +474,32 @@ class YtDlpPlugin :
                 target.outputStream().use { output -> input.copyTo(output) }
             }
             runCatching { src.delete() }
-            // Make the MediaStore index pick up the new file so it appears in
-            // the gallery without a reboot.
-            val values = ContentValues().apply {
-                put(MediaStore.MediaColumns.DATA, target.absolutePath)
-                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
-                put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+            // Index the file under the MediaStore so the gallery picks it up
+            // without a reboot. Sidecars (`.srt`, ...) skip this — the typed
+            // Audio / Video collections reject non-A/V MIME types and we
+            // already wrote the file to disk so the user can see it.
+            if (!isSidecar) {
+                val values = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DATA, target.absolutePath)
+                    put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, displayName)
+                }
+                val collection = if (isAudio) {
+                    @Suppress("DEPRECATION")
+                    MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
+                } else {
+                    @Suppress("DEPRECATION")
+                    MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                }
+                val uri = runCatching { context.contentResolver.insert(collection, values) }
+                    .getOrNull()
+                return mapOf(
+                    "uri" to (uri?.toString() ?: "file://${target.absolutePath}"),
+                    "displayPath" to target.absolutePath,
+                )
             }
-            val collection = if (isAudio) {
-                @Suppress("DEPRECATION")
-                MediaStore.Audio.Media.EXTERNAL_CONTENT_URI
-            } else {
-                @Suppress("DEPRECATION")
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            }
-            val uri = runCatching { context.contentResolver.insert(collection, values) }
-                .getOrNull()
             return mapOf(
-                "uri" to (uri?.toString() ?: "file://${target.absolutePath}"),
+                "uri" to "file://${target.absolutePath}",
                 "displayPath" to target.absolutePath,
             )
         }
@@ -573,14 +652,15 @@ class YtDlpPlugin :
         }
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private fun emitOnMain(event: Map<String, Any?>) {
-        // EventSink.success must be called on the platform-thread / main
-        // thread. We dispatch via the channel's handler which already does
-        // this internally — wrap in a try because the sink may have been
-        // torn down while a coroutine was still running.
-        try {
-            eventSink?.success(event)
-        } catch (_: Throwable) { /* sink is gone — drop event */ }
+        val sink = eventSink ?: return
+        mainHandler.post {
+            try {
+                sink.success(event)
+            } catch (_: Throwable) { /* sink is gone — drop event */ }
+        }
     }
 
     companion object {

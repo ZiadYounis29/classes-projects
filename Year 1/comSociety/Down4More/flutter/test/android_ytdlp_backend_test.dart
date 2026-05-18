@@ -408,7 +408,7 @@ void main() {
       await drain;
     });
 
-    test('trim window uses --download-sections in *HH:MM:SS-HH:MM:SS form',
+    test('trim uses --download-sections without --force-keyframes-at-cuts',
         () async {
       final handle = backend.download(
         metadata: testMetadata(),
@@ -430,7 +430,8 @@ void main() {
           '*00:00:05-00:01:30',
         ]),
       );
-      expect(args, contains('--force-keyframes-at-cuts'));
+      // --force-keyframes-at-cuts causes failures on Android, must NOT appear.
+      expect(args, isNot(contains('--force-keyframes-at-cuts')));
 
       events.emit(<String, dynamic>{
         'downloadId': (calls
@@ -886,6 +887,115 @@ void main() {
       expect(args['isAudio'], isTrue);
       expect(args['mimeType'], 'audio/mpeg');
       expect(args['subfolder'], isNull);
+    });
+
+    test(
+        'subtitle sidecar is exported with isSidecar=true and the correct '
+        'subrip MIME so MediaStore.Files accepts it', () async {
+      final handle = backend.download(
+        metadata: testMetadata(),
+        format: testFormat(),
+        outputDir: '/storage/emulated/0/Movies/Down4More',
+      );
+      final drain = handle.stream.toList();
+      await startCompleter.future;
+      final downloadId =
+          (calls.firstWhere((c) => c.method == 'startDownload').arguments
+              as Map)['downloadId'] as String;
+
+      // Two Destination lines — first the video (.mp4), then the subtitle
+      // (.srt). The backend should track them separately and export BOTH.
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'progress',
+        'line':
+            '[download] Destination: /data/data/com.ziadyounis.down4more/cache/Test.mp4',
+      });
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'progress',
+        'line':
+            '[download] Destination: /data/data/com.ziadyounis.down4more/cache/Test.en.srt',
+      });
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'completed',
+        'exitCode': 0,
+        'stdout': '',
+        'stderr': '',
+      });
+      await drain;
+
+      final exports = calls
+          .where((c) => c.method == 'exportToMediaStore')
+          .toList();
+      expect(exports.length, 2,
+          reason: 'both the video and the subtitle sidecar should be '
+              'exported to the MediaStore');
+
+      final videoArgs = (exports.first.arguments as Map).cast<String, dynamic>();
+      expect(videoArgs['isSidecar'], isFalse,
+          reason: 'video export must NOT use the sidecar code path');
+      expect(videoArgs['mimeType'], 'video/mp4');
+
+      final subArgs = (exports.last.arguments as Map).cast<String, dynamic>();
+      expect(subArgs['isSidecar'], isTrue,
+          reason:
+              'subtitle export MUST set isSidecar=true so the native plugin '
+              'routes it through MediaStore.Files');
+      expect(subArgs['mimeType'], 'application/x-subrip',
+          reason: '.srt sidecar should use the dedicated SubRip MIME');
+      expect(subArgs['displayName'], 'Test.en.srt');
+      expect(subArgs['isAudio'], isFalse,
+          reason: 'video downloads place sidecars under Movies/Down4More');
+    });
+
+    test(
+        'subtitle sidecar for an audio download passes isAudio=true so the '
+        '.srt lands in Music/Down4More alongside the .mp3', () async {
+      final handle = backend.download(
+        metadata: testMetadata(),
+        format: testFormat(audio: true),
+        outputDir: '/storage/emulated/0/Music/Down4More',
+        outputExt: 'mp3',
+      );
+      final drain = handle.stream.toList();
+      await startCompleter.future;
+      final downloadId =
+          (calls.firstWhere((c) => c.method == 'startDownload').arguments
+              as Map)['downloadId'] as String;
+
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'progress',
+        'line':
+            '[download] Destination: /data/data/com.ziadyounis.down4more/cache/Talk.mp3',
+      });
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'progress',
+        'line':
+            '[download] Destination: /data/data/com.ziadyounis.down4more/cache/Talk.en.vtt',
+      });
+      events.emit(<String, dynamic>{
+        'downloadId': downloadId,
+        'type': 'completed',
+        'exitCode': 0,
+        'stdout': '',
+        'stderr': '',
+      });
+      await drain;
+
+      final exports = calls
+          .where((c) => c.method == 'exportToMediaStore')
+          .toList();
+      expect(exports.length, 2);
+      final subArgs = (exports.last.arguments as Map).cast<String, dynamic>();
+      expect(subArgs['isSidecar'], isTrue);
+      expect(subArgs['isAudio'], isTrue,
+          reason: 'audio downloads place sidecars under Music/Down4More');
+      expect(subArgs['mimeType'], 'text/vtt',
+          reason: '.vtt sidecars should use the WebVTT MIME');
     });
 
     test('export failure falls back to the scratch path without crashing',

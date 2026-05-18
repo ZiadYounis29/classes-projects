@@ -5,6 +5,32 @@ plugins {
     id "dev.flutter.flutter-gradle-plugin"
 }
 
+// ── Release signing ──────────────────────────────────────────────────────────
+//
+// Reads keystore credentials from `android/key.properties` (gitignored).
+// If the file is missing or any field is blank the release build falls back
+// to the debug keys so `flutter build apk --release` still works for local
+// smoke-testing (Play Store rejects debug-signed APKs, but sideloading
+// onto your own device works fine).
+//
+// To configure real release signing:
+//   1. Generate a keystore once with `keytool`:
+//        keytool -genkey -v -keystore ~/down4more-release.jks \
+//          -keyalg RSA -keysize 2048 -validity 10000 \
+//          -alias down4more
+//   2. Copy `android/key.properties.example` to `android/key.properties`
+//      and fill in the four values. Never commit `key.properties` or the
+//      `.jks` file.
+//   3. In CI, write `key.properties` from secrets at build time.
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+def hasReleaseKey = keystorePropertiesFile.exists() &&
+    keystoreProperties.getProperty("storeFile") &&
+    keystoreProperties.getProperty("keyAlias")
+
 android {
     namespace = "com.ziadyounis.down4more.down4more"
     compileSdk = flutter.compileSdkVersion
@@ -46,13 +72,36 @@ android {
         jniLibs {
             useLegacyPackaging = true
         }
+        // youtubedl-android ships ZIP archives renamed to .so (libpython.zip.so,
+        // libffmpeg.zip.so) so Android's native loader extracts them. They are
+        // NOT real ELF binaries, so llvm-strip (used by AGP 8.6+) fails on them.
+        doNotStrip '**/*.zip.so'
+    }
+
+    signingConfigs {
+        // Only registered when `android/key.properties` is present with the
+        // required fields. Gradle resolves names lazily so referencing
+        // `signingConfigs.release` below would NPE on machines without the
+        // file — we read into a local variable instead.
+        if (hasReleaseKey) {
+            release {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.debug
+            // When `android/key.properties` exists we sign with the user's
+            // real keystore — Play Store-ready. Without it, fall back to
+            // the debug keys so `flutter build apk --release` and the
+            // GitHub Actions APK job still produce something installable.
+            signingConfig = hasReleaseKey
+                ? signingConfigs.release
+                : signingConfigs.debug
         }
     }
 }

@@ -228,11 +228,16 @@ class _HistoryRow extends StatelessWidget {
     final fileExists =
         entry.outputPath.isNotEmpty && File(entry.outputPath).existsSync();
 
-    // Show the actual saved filename (without extension) rather than the
-    // original video title so the user sees exactly what landed on disk.
-    final displayName = entry.outputPath.isNotEmpty
+    // Prefer the original video title (what the user pasted/searched for),
+    // falling back to the saved filename when the metadata title was empty
+    // (e.g. a failed fetch). The actual saved filename is surfaced in the
+    // meta line below so users can still cross-reference it with disk.
+    final filename = entry.outputPath.isNotEmpty
         ? p.basenameWithoutExtension(entry.outputPath)
-        : entry.title;
+        : '';
+    final displayName = entry.title.trim().isNotEmpty
+        ? entry.title.trim()
+        : (filename.isNotEmpty ? filename : '(untitled)');
 
     // Icon and colour vary by status.
     final IconData rowIcon;

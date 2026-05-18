@@ -60,7 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
   static const List<_NavDestination> _destinations = [
     _NavDestination(Icons.link_outlined,           Icons.link,              'Single'),
     _NavDestination(Icons.list_alt_outlined,        Icons.list_alt,          'Playlist'),
-    _NavDestination(Icons.dynamic_feed_outlined,    Icons.dynamic_feed,      'Batch'),
+    _NavDestination(Icons.layers_outlined,          Icons.layers,            'Batch'),
     _NavDestination(Icons.history_outlined,         Icons.history,           'History'),
     _NavDestination(Icons.folder_open_outlined,     Icons.folder_open,       'My Files'),
     _NavDestination(Icons.settings_outlined,        Icons.settings,          'Settings'),
@@ -98,10 +98,31 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       );
     }
+    // On narrow layouts, Settings lives in the AppBar action (top-right)
+    // instead of the bottom nav to save space. The bottom nav only shows
+    // the five main destinations.
+    const settingsIndex = 5; // index of SettingsScreen in _screens
+    final bottomDestinations = _destinations.where((d) => d.label != 'Settings').toList();
+    final effectiveIndex = _selectedIndex >= bottomDestinations.length
+        ? 0
+        : _selectedIndex;
+
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 16,
         title: const D4MLogo(showText: true, size: 22),
+        actions: [
+          IconButton(
+            icon: Icon(
+              _selectedIndex == settingsIndex
+                  ? Icons.settings
+                  : Icons.settings_outlined,
+            ),
+            tooltip: 'Settings',
+            onPressed: () => setState(() => _selectedIndex = settingsIndex),
+          ),
+          const SizedBox(width: 4),
+        ],
       ),
       body: SafeArea(
         child: IndexedStack(
@@ -110,10 +131,10 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
       bottomNavigationBar: NavigationBar(
-        selectedIndex: _selectedIndex,
+        selectedIndex: effectiveIndex,
         onDestinationSelected: (i) => setState(() => _selectedIndex = i),
         destinations: [
-          for (final d in _destinations)
+          for (final d in bottomDestinations)
             NavigationDestination(
               icon: Icon(d.icon),
               selectedIcon: Icon(d.selectedIcon),

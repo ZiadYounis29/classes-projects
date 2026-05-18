@@ -9,6 +9,7 @@ import '../settings/app_settings.dart';
 import '../widgets/download_progress_view.dart';
 import '../widgets/format_dropdown.dart';
 import '../widgets/metadata_card.dart';
+import '../widgets/bidi_text_field.dart';
 import '../widgets/quality_dropdown.dart';
 import '../widgets/subtitle_input.dart';
 import '../widgets/trim_input.dart';
@@ -242,7 +243,7 @@ class SingleScreenState extends State<SingleScreen> {
                       onSubtitlesChanged: _controller.setSubtitleSettings,
                     ),
                     const SizedBox(height: 12),
-                    TextField(
+                    BidiTextField(
                       controller: _filenameController,
                       enabled: !isLocked,
                       onChanged: (value) =>
@@ -464,7 +465,7 @@ class _UrlInputRow extends StatelessWidget {
     return Row(
       children: [
         Expanded(
-          child: TextField(
+          child: BidiTextField(
             controller: controller,
             enabled: enabled,
             onSubmitted: onSubmitted,

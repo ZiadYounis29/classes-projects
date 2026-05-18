@@ -6,6 +6,7 @@ import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
 import '../services/download_history.dart';
 import '../settings/app_settings.dart';
+import '../widgets/bidi_text_field.dart';
 import '../widgets/queue_item_row.dart';
 import '../widgets/format_dropdown.dart' show formatBytes;
 import '../widgets/subtitle_input.dart';
@@ -283,7 +284,7 @@ class _BatchScreenState extends State<BatchScreen> {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
-        TextField(
+        BidiTextField(
           controller: _urlsCtrl,
           maxLines: 8,
           keyboardType: TextInputType.multiline,
@@ -294,7 +295,7 @@ class _BatchScreenState extends State<BatchScreen> {
             alignLabelWithHint: true,
             prefixIcon: Padding(
               padding: EdgeInsets.only(bottom: 140),
-              child: Icon(Icons.dynamic_feed),
+              child: Icon(Icons.layers_outlined),
             ),
           ),
         ),
@@ -749,7 +750,7 @@ class _ConfigureCard extends StatelessWidget {
                   if (queue.groupFolderEnabled)
                     Padding(
                       padding: const EdgeInsets.only(top: 6),
-                      child: TextField(
+                      child: BidiTextField(
                         controller: folderCtrl,
                         decoration: const InputDecoration(
                           labelText: 'Folder name',
@@ -764,29 +765,37 @@ class _ConfigureCard extends StatelessWidget {
               ),
             ),
             const SizedBox(height: 16),
-            Row(
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 TextButton.icon(
                   onPressed: onBack,
                   icon: const Icon(Icons.arrow_back),
                   label: const Text('Back to URLs'),
                 ),
-                const Spacer(),
-                if (totalSizeLabel != null) ...[
-                  Text(
-                    totalSizeLabel,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: Theme.of(context).colorScheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w500,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (totalSizeLabel != null) ...[
+                      Text(
+                        totalSizeLabel,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+                    FilledButton.icon(
+                      onPressed:
+                          previewing || total == 0 ? null : onStartDownload,
+                      icon: const Icon(Icons.download_rounded),
+                      label: Text('Download $total items'),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                ],
-                FilledButton.icon(
-                  onPressed:
-                      previewing || total == 0 ? null : onStartDownload,
-                  icon: const Icon(Icons.download_rounded),
-                  label: Text('Download $total items'),
+                  ],
                 ),
               ],
             ),

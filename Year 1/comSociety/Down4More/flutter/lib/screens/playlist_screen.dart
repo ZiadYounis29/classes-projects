@@ -7,6 +7,7 @@ import '../models/subtitle_settings.dart';
 import '../models/video_metadata.dart';
 import '../services/download_history.dart';
 import '../settings/app_settings.dart';
+import '../widgets/bidi_text_field.dart';
 import '../widgets/queue_item_row.dart';
 import '../widgets/format_dropdown.dart' show formatBytes;
 import '../widgets/subtitle_input.dart';
@@ -361,7 +362,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
     return Row(
       children: [
         Expanded(
-          child: TextField(
+          child: BidiTextField(
             controller: _urlCtrl,
             enabled: enabled,
             onSubmitted: (_) => _onFetch(),
@@ -698,7 +699,7 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
             ),
             if (_groupFolderEnabled) ...[
               const SizedBox(height: 6),
-              TextField(
+              BidiTextField(
                 controller: _folderCtrl,
                 decoration: const InputDecoration(
                   labelText: 'Folder name',
@@ -710,29 +711,37 @@ class _PlaylistScreenState extends State<PlaylistScreen> {
               ),
             ],
             const SizedBox(height: 16),
-            Row(
+            Wrap(
+              alignment: WrapAlignment.spaceBetween,
+              crossAxisAlignment: WrapCrossAlignment.center,
+              spacing: 8,
+              runSpacing: 8,
               children: [
                 TextButton.icon(
                   onPressed: _onBackToSelection,
                   icon: const Icon(Icons.arrow_back),
                   label: const Text('Back to selection'),
                 ),
-                const Spacer(),
-                if (totalSizeLabel != null) ...[
-                  Text(
-                    totalSizeLabel,
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(
-                      color: scheme.onSurfaceVariant,
-                      fontWeight: FontWeight.w500,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (totalSizeLabel != null) ...[
+                      Text(
+                        totalSizeLabel,
+                        style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                          color: scheme.onSurfaceVariant,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                    ],
+                    FilledButton.icon(
+                      onPressed:
+                          _previewing || total == 0 ? null : _onStartDownload,
+                      icon: const Icon(Icons.download_rounded),
+                      label: Text('Download $total items'),
                     ),
-                  ),
-                  const SizedBox(width: 12),
-                ],
-                FilledButton.icon(
-                  onPressed:
-                      _previewing || total == 0 ? null : _onStartDownload,
-                  icon: const Icon(Icons.download_rounded),
-                  label: Text('Download $total items'),
+                  ],
                 ),
               ],
             ),

@@ -1099,7 +1099,14 @@ class DownloadQueueController extends ChangeNotifier {
     } else {
       Directory? base;
       try {
-        base = await getDownloadsDirectory();
+        // On Android, use the app-specific external storage directory which
+        // is writable without permissions. AndroidYtDlpBackend exports the
+        // finished file to MediaStore afterward.
+        if (Platform.isAndroid) {
+          base = await getExternalStorageDirectory();
+        } else {
+          base = await getDownloadsDirectory();
+        }
       } catch (_) {
         base = null;
       }
