@@ -305,17 +305,26 @@ class YtDlpPlugin :
         scope.launch {
             try {
                 ensureInitialized()
-                val request = YoutubeDLRequest("")
-                for (arg in args) {
-                    request.addOption(arg)
-                }
-                val response: YoutubeDLResponse = FFmpeg.getInstance().execute(request)
+                val ffmpegBin = findFfmpegBinary()
+                    ?: throw Exception("ffmpeg binary not found")
+
+                val cmd = mutableListOf(ffmpegBin.absolutePath)
+                cmd.addAll(args)
+
+                val process = ProcessBuilder(cmd)
+                    .redirectErrorStream(false)
+                    .start()
+
+                val stdout = process.inputStream.bufferedReader().readText()
+                val stderr = process.errorStream.bufferedReader().readText()
+                val exitCode = process.waitFor()
+
                 withContext(Dispatchers.Main) {
                     result.success(
                         mapOf(
-                            "exitCode" to response.exitCode,
-                            "stdout" to response.out,
-                            "stderr" to response.err,
+                            "exitCode" to exitCode,
+                            "stdout" to stdout,
+                            "stderr" to stderr,
                         ),
                     )
                 }
@@ -325,6 +334,21 @@ class YtDlpPlugin :
                 }
             }
         }
+    }
+
+    private fun findFfmpegBinary(): File? {
+        val searchDirs = listOf(
+            File(context.noBackupFilesDir, "youtubedl-android"),
+            context.noBackupFilesDir,
+            context.filesDir,
+        )
+        for (dir in searchDirs) {
+            if (!dir.exists()) continue
+            dir.walkTopDown().forEach { file ->
+                if (file.name == "ffmpeg" && file.canExecute()) return file
+            }
+        }
+        return null
     }
 
     // ── MediaStore export ───────────────────────────────────────────────────
