@@ -23,6 +23,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.os.Handler
+import android.os.Looper
 import java.io.File
 import java.io.FileInputStream
 import java.util.concurrent.ConcurrentHashMap
@@ -573,14 +575,15 @@ class YtDlpPlugin :
         }
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+
     private fun emitOnMain(event: Map<String, Any?>) {
-        // EventSink.success must be called on the platform-thread / main
-        // thread. We dispatch via the channel's handler which already does
-        // this internally — wrap in a try because the sink may have been
-        // torn down while a coroutine was still running.
-        try {
-            eventSink?.success(event)
-        } catch (_: Throwable) { /* sink is gone — drop event */ }
+        val sink = eventSink ?: return
+        mainHandler.post {
+            try {
+                sink.success(event)
+            } catch (_: Throwable) { /* sink is gone — drop event */ }
+        }
     }
 
     companion object {

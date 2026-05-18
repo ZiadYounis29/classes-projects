@@ -309,6 +309,13 @@ class SingleDownloadController extends ChangeNotifier {
       return;
     }
 
+    // Give immediate visual feedback so the UI transitions from the "ready"
+    // state to "downloading" even before the first stream event arrives from
+    // the platform side. Without this, Android downloads appear to "do
+    // nothing" because the EventChannel round-trip takes time.
+    _progress = const DownloadProgress(phase: DownloadPhase.downloading);
+    notifyListeners();
+
     _handle = _service.download(
       metadata: m,
       format: f,
@@ -448,7 +455,14 @@ class SingleDownloadController extends ChangeNotifier {
 Future<String> _platformDownloadsDir() async {
   Directory? base;
   try {
-    base = await getDownloadsDirectory();
+    // On Android, use the app-specific external storage directory which is
+    // writable without permissions. yt-dlp writes here as a scratch area;
+    // AndroidYtDlpBackend exports the finished file to MediaStore afterward.
+    if (Platform.isAndroid) {
+      base = await getExternalStorageDirectory();
+    } else {
+      base = await getDownloadsDirectory();
+    }
   } catch (_) {
     base = null;
   }
