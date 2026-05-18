@@ -77,6 +77,7 @@ class YtDlpPlugin :
         methodChannel.setMethodCallHandler(this)
         eventChannel = EventChannel(binding.binaryMessenger, EVENT_CHANNEL)
         eventChannel.setStreamHandler(this)
+        synchronized(instanceLock) { activeInstance = this }
     }
 
     override fun onDetachedFromEngine(binding: FlutterPlugin.FlutterPluginBinding) {
@@ -84,6 +85,9 @@ class YtDlpPlugin :
         eventChannel.setStreamHandler(null)
         scope.cancel()
         downloadJobs.clear()
+        synchronized(instanceLock) {
+            if (activeInstance === this) activeInstance = null
+        }
     }
 
     override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -317,19 +321,28 @@ class YtDlpPlugin :
         if (downloadId.isNullOrBlank()) {
             result.error(ERR_ARG, "downloadId is required", null); return
         }
+        cancelDownloadById(downloadId)
+        result.success(null)
+    }
+
+    /**
+     * Cancel a single in-flight download by the opaque id the Dart side
+     * generated. Safe to call for unknown ids — emits a synthetic
+     * `cancelled` event so callers always see the stream terminate.
+     */
+    private fun cancelDownloadById(downloadId: String) {
         try {
             YoutubeDL.getInstance().destroyProcessById(downloadId)
         } catch (_: Throwable) {
-            // destroyProcessById throws if the id is unknown; we treat that as
-            // already-cancelled and emit a synthetic cancelled event so the
-            // Dart side's stream still terminates.
+            // destroyProcessById throws if the id is unknown; we treat that
+            // as already-cancelled and still emit a synthetic event below
+            // so the Dart side's stream terminates.
         }
         // Cancelling the coroutine triggers its `finally` block which calls
         // onDownloadFinished(); we don't have to bump the counter here.
         downloadJobs[downloadId]?.cancel()
         downloadJobs.remove(downloadId)
         emitOnMain(mapOf("downloadId" to downloadId, "type" to "cancelled"))
-        result.success(null)
     }
 
     // ── MediaStore export ───────────────────────────────────────────────────
@@ -674,5 +687,31 @@ class YtDlpPlugin :
         private const val ERR_CANCELLED = "cancelled"
         private const val ERR_UNKNOWN = "unknown"
         private const val ERR_EXPORT = "export_failed"
+
+        // The plugin is attached to a single FlutterEngine in this app, so a
+        // weak-singleton reference is enough for [DownloadActionReceiver] to
+        // route a "Cancel" tap from the foreground-service notification back
+        // into the running plugin without going through the MethodChannel
+        // (which would require the Dart engine to be alive and listening).
+        private val instanceLock = Any()
+        @Volatile
+        private var activeInstance: YtDlpPlugin? = null
+
+        /**
+         * Cancel every download currently tracked by the live plugin. Called
+         * by [DownloadActionReceiver] when the user taps the "Cancel" action
+         * on the ongoing-download notification.
+         *
+         * Safe to call when no downloads are running and even when the
+         * Flutter engine has been torn down — in both cases this is a no-op.
+         */
+        fun cancelAllActiveDownloads() {
+            val plugin = synchronized(instanceLock) { activeInstance } ?: return
+            // Snapshot the keys before mutating the map.
+            val ids = plugin.downloadJobs.keys.toList()
+            for (id in ids) {
+                plugin.cancelDownloadById(id)
+            }
+        }
     }
 }
