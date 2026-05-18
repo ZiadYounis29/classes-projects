@@ -93,6 +93,7 @@ class YtDlpPlugin :
             "getInfoSingle" -> handleGetInfoSingle(call, result)
             "startDownload" -> handleStartDownload(call, result)
             "cancelDownload" -> handleCancelDownload(call, result)
+            "runFfmpeg" -> handleRunFfmpeg(call, result)
             "exportToMediaStore" -> handleExportToMediaStore(call, result)
             "openFile" -> handleOpenFile(call, result)
             "openFolder" -> handleOpenFolder(call, result)
@@ -295,6 +296,35 @@ class YtDlpPlugin :
         downloadJobs.remove(downloadId)
         emitOnMain(mapOf("downloadId" to downloadId, "type" to "cancelled"))
         result.success(null)
+    }
+
+    // ── ffmpeg ─────────────────────────────────────────────────────────────
+
+    private fun handleRunFfmpeg(call: MethodCall, result: MethodChannel.Result) {
+        val args = call.argument<List<String>>("args") ?: emptyList()
+        scope.launch {
+            try {
+                ensureInitialized()
+                val request = YoutubeDLRequest("")
+                for (arg in args) {
+                    request.addOption(arg)
+                }
+                val response: YoutubeDLResponse = FFmpeg.getInstance().execute(request)
+                withContext(Dispatchers.Main) {
+                    result.success(
+                        mapOf(
+                            "exitCode" to response.exitCode,
+                            "stdout" to response.out,
+                            "stderr" to response.err,
+                        ),
+                    )
+                }
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) {
+                    result.error(ERR_UNKNOWN, e.message ?: "ffmpeg failed", null)
+                }
+            }
+        }
     }
 
     // ── MediaStore export ───────────────────────────────────────────────────
