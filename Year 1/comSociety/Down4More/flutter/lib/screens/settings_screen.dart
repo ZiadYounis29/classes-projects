@@ -1,3 +1,7 @@
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -288,6 +292,32 @@ class _FolderPickerTile extends StatelessWidget {
   final AppSettings appSettings;
 
   Future<void> _pick(BuildContext context) async {
+    // On desktop, the OS folder picker is far friendlier than asking the
+    // user to type an absolute path. Android's SAF picker returns a
+    // `content://` URI that yt-dlp can't write to, so we fall through to
+    // the manual-entry dialog (with platform-aware copy) on Android.
+    final useNativePicker = !kIsWeb &&
+        (Platform.isLinux || Platform.isMacOS || Platform.isWindows);
+    if (useNativePicker) {
+      try {
+        final picked = await FilePicker.getDirectoryPath(
+          dialogTitle: 'Choose download folder',
+          initialDirectory: appSettings.downloadDir.isNotEmpty
+              ? appSettings.downloadDir
+              : null,
+        );
+        if (picked != null && picked.isNotEmpty) {
+          await appSettings.setDownloadDir(picked);
+        }
+        return;
+      } catch (_) {
+        // Native picker missing or failed (e.g. Linux without
+        // zenity/kdialog). Fall back to the manual dialog so the user can
+        // still set a folder by typing the path.
+      }
+    }
+
+    if (!context.mounted) return;
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => _FolderInputDialog(initial: appSettings.downloadDir),
@@ -302,6 +332,16 @@ class _FolderPickerTile extends StatelessWidget {
     final scheme  = Theme.of(context).colorScheme;
     final theme   = Theme.of(context);
     final current = appSettings.downloadDir;
+    final isAndroid = !kIsWeb && Platform.isAndroid;
+
+    // Android's destination is always `Movies/Down4More/` (or
+    // `Music/Down4More/`) via MediaStore — the `downloadDir` setting
+    // controls the scratch dir yt-dlp writes into before the export. Be
+    // upfront about that so users don't think they're customising the
+    // gallery destination.
+    final defaultLabel = isAndroid
+        ? 'Default — app scratch dir, exported to Movies/Down4More/'
+        : 'Default — ~/Downloads/Down4More';
 
     return _SettingCard(
       child: Row(
@@ -316,7 +356,7 @@ class _FolderPickerTile extends StatelessWidget {
                     style: theme.textTheme.bodyLarge
                         ?.copyWith(fontWeight: FontWeight.w600)),
                 Text(
-                  current.isEmpty ? 'Default — ~/Downloads/Down4More' : current,
+                  current.isEmpty ? defaultLabel : current,
                   style: theme.textTheme.bodySmall?.copyWith(
                     color: scheme.onSurfaceVariant,
                     fontFamily: current.isEmpty ? null : 'monospace',
@@ -324,6 +364,18 @@ class _FolderPickerTile extends StatelessWidget {
                   maxLines: 2,
                   overflow: TextOverflow.ellipsis,
                 ),
+                if (isAndroid) ...[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Finished files always appear under '
+                    'Movies/Down4More (or Music/Down4More for audio). '
+                    'This setting only changes the scratch folder.',
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: scheme.onSurfaceVariant,
+                      fontStyle: FontStyle.italic,
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -333,8 +385,11 @@ class _FolderPickerTile extends StatelessWidget {
             children: [
               FilledButton.tonalIcon(
                 onPressed: () => _pick(context),
-                icon: const Icon(Icons.edit_outlined, size: 16),
-                label: const Text('Change'),
+                icon: Icon(
+                  isAndroid ? Icons.edit_outlined : Icons.folder_open_outlined,
+                  size: 16,
+                ),
+                label: Text(isAndroid ? 'Change' : 'Browse'),
               ),
               if (current.isNotEmpty) ...[
                 const SizedBox(height: 4),
@@ -388,20 +443,43 @@ class _FolderInputDialogState extends State<_FolderInputDialog> {
 
   @override
   Widget build(BuildContext context) {
+    final isAndroid = !kIsWeb && Platform.isAndroid;
+    final hint = isAndroid
+        ? '/storage/emulated/0/Download/Down4More'
+        : (Platform.isWindows
+            ? 'C:\\Users\\you\\Videos'
+            : '/home/you/Videos');
+
     return AlertDialog(
       title: const Text('Download folder'),
       content: SizedBox(
         width: 400,
-        child: TextField(
-          controller: _ctrl,
-          autofocus: true,
-          onSubmitted: (_) => _submit(),
-          decoration: InputDecoration(
-            labelText: 'Absolute path',
-            hintText: '/home/user/Videos',
-            errorText: _error,
-            prefixIcon: const Icon(Icons.folder_outlined),
-          ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (isAndroid)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: Text(
+                  'Type the absolute path to your scratch folder. The '
+                  'finished file is still copied to Movies/Down4More/ '
+                  '(or Music/Down4More/) so it shows up in the gallery.',
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            TextField(
+              controller: _ctrl,
+              autofocus: true,
+              onSubmitted: (_) => _submit(),
+              decoration: InputDecoration(
+                labelText: 'Absolute path',
+                hintText: hint,
+                errorText: _error,
+                prefixIcon: const Icon(Icons.folder_outlined),
+              ),
+            ),
+          ],
         ),
       ),
       actions: [

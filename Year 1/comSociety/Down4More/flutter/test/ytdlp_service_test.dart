@@ -61,6 +61,70 @@ void main() {
       expect(p, isNotNull);
       expect(p!.percent, closeTo(50.0, 0.001));
     });
+
+    // ── ffmpeg time= lines (trim mode) ───────────────────────────────────
+
+    test(
+        'parses ffmpeg time= into a percent of the trim segment when '
+        'trimDuration is supplied', () {
+      // 60s trim, we're 30s in → ~50%.
+      final p = parseProgressLine(
+        'frame= 1234 fps=30.0 q=24.0 size=   12345kB time=00:00:30.00 '
+        'bitrate=2392.4kbits/s speed=1.50x',
+        trimDuration: const Duration(seconds: 60),
+      );
+      expect(p, isNotNull);
+      expect(p!.phase, DownloadPhase.downloading);
+      expect(p.percent, closeTo(50.0, 0.5),
+          reason: '30s elapsed of a 60s trim should report ~50%');
+      // ETA = remaining (30s) / speed (1.5x) = 20s.
+      expect(p.eta!.inSeconds, inInclusiveRange(19, 21));
+      // bitrate (2392.4 kbits/s) * 1024 / 8 * 1.5 ≈ 459_341 B/s.
+      expect(p.speedBytesPerSecond, closeTo(459_341, 5000));
+      expect(p.message, contains('1.5×'));
+    });
+
+    test(
+        'ffmpeg time= without trimDuration emits null percent/eta but still '
+        'surfaces the speed in the message', () {
+      final p = parseProgressLine(
+        'frame=  60 fps=30.0 q=24.0 size=     500kB time=00:00:02.00 '
+        'bitrate=2048.0kbits/s speed=2.00x',
+      );
+      expect(p, isNotNull);
+      expect(p!.percent, isNull,
+          reason: 'no trimDuration → cannot compute a percent');
+      expect(p.eta, isNull);
+      expect(p.message, contains('2.0×'));
+    });
+
+    test('ffmpeg time= clamps percent to 100 when ffmpeg overshoots',
+        () {
+      // ffmpeg's `time=` is occasionally a few ms past the requested
+      // duration on the last line — should still cap at 100%.
+      final p = parseProgressLine(
+        'frame= 1800 fps=30.0 q=24.0 size=   45000kB time=00:01:00.50 '
+        'bitrate=2400.0kbits/s speed=1.00x',
+        trimDuration: const Duration(seconds: 60),
+      );
+      expect(p, isNotNull);
+      expect(p!.percent, closeTo(100.0, 0.001));
+    });
+
+    test('ffmpeg time= falls back gracefully when speed= is missing',
+        () {
+      // Older ffmpeg builds (or the very first line) omit `speed=`.
+      final p = parseProgressLine(
+        'frame=  60 fps= 0.0 q=0.0 size=N/A time=00:00:02.00 bitrate=N/A',
+        trimDuration: const Duration(seconds: 10),
+      );
+      expect(p, isNotNull);
+      expect(p!.percent, closeTo(20.0, 0.5));
+      // No speedX → ETA can't be computed.
+      expect(p.eta, isNull);
+      // No speedX → can't render the realtime multiplier.
+      expect(p.message, equals('Trimming segment with ffmpeg…'));
+    });
   });
 
   group('YtDlpService.fetchMetadata', () {

@@ -1134,7 +1134,14 @@ class YtDlpException implements Exception {
 ///
 /// Public so cross-platform backends (e.g. [AndroidYtDlpBackend]) can share
 /// the same parser — yt-dlp's progress lines are identical on every host.
-DownloadProgress? parseProgressLine(String line) {
+///
+/// [trimDuration] is the length of the requested `--download-sections`
+/// segment (i.e. `trimEnd - trimStart`). When set, ffmpeg progress lines
+/// (`time=HH:MM:SS.ms speed=1.23x`) are turned into a real percent +
+/// ETA so trim-mode downloads animate against actual progress instead of
+/// sitting at an indeterminate spinner. Pass `null` for non-trim
+/// downloads.
+DownloadProgress? parseProgressLine(String line, {Duration? trimDuration}) {
   final trimmed = line.trim();
   if (trimmed.isEmpty) return null;
 
@@ -1186,6 +1193,70 @@ DownloadProgress? parseProgressLine(String line) {
               .toDouble()
           : null,
       eta: etaStr != null ? _parseEta(etaStr) : null,
+    );
+  }
+
+  // ffmpeg progress line, surfaced by yt-dlp's `--download-sections` (trim
+  // mode) via stderr. Example:
+  //   frame= 1234 fps=30.0 q=24.0 size=   12345kB time=00:00:42.13
+  //   bitrate=2392.4kbits/s speed=1.23x
+  //
+  // We can derive:
+  //   - percent  = elapsed output time / total trim duration
+  //   - eta      = remaining output time / speed multiplier
+  //   - bytes/s  = size delta isn't reliable per line, but `bitrate` *
+  //                speed roughly equals real-time output bytes/s
+  final ffTime = RegExp(r'\btime=\s*(\d+):(\d+):(\d+(?:\.\d+)?)')
+      .firstMatch(trimmed);
+  if (ffTime != null) {
+    final h = int.tryParse(ffTime.group(1)!) ?? 0;
+    final m = int.tryParse(ffTime.group(2)!) ?? 0;
+    final s = double.tryParse(ffTime.group(3)!) ?? 0.0;
+    final elapsedMs = ((h * 3600 + m * 60) * 1000 + (s * 1000).round());
+
+    final speedMatch = RegExp(r'\bspeed=\s*([\d.]+)x').firstMatch(trimmed);
+    final speedX = speedMatch != null
+        ? double.tryParse(speedMatch.group(1)!)
+        : null;
+
+    final bitrateMatch =
+        RegExp(r'\bbitrate=\s*([\d.]+)\s*kbits/s').firstMatch(trimmed);
+    final bitrateKbps = bitrateMatch != null
+        ? double.tryParse(bitrateMatch.group(1)!)
+        : null;
+
+    double? percent;
+    Duration? eta;
+    if (trimDuration != null && trimDuration.inMilliseconds > 0) {
+      percent =
+          (elapsedMs / trimDuration.inMilliseconds * 100).clamp(0.0, 100.0);
+      if (speedX != null && speedX > 0) {
+        final remainingOutputMs =
+            trimDuration.inMilliseconds - elapsedMs;
+        if (remainingOutputMs > 0) {
+          final remainingRealSec = (remainingOutputMs / 1000) / speedX;
+          eta = Duration(seconds: remainingRealSec.round());
+        }
+      }
+    }
+
+    // bitrate is "output bytes per output second". Multiplying by speedX
+    // gives "output bytes per real second" — the same units the [download]
+    // line's "X.X MiB/s" reports. Falls back to null when either piece is
+    // missing.
+    double? speedBytesPerSecond;
+    if (bitrateKbps != null && speedX != null && speedX > 0) {
+      speedBytesPerSecond = bitrateKbps * 1024 / 8 * speedX;
+    }
+
+    return DownloadProgress(
+      phase: DownloadPhase.downloading,
+      percent: percent,
+      eta: eta,
+      speedBytesPerSecond: speedBytesPerSecond,
+      message: speedX != null
+          ? 'Trimming · ${speedX.toStringAsFixed(1)}× realtime'
+          : 'Trimming segment with ffmpeg…',
     );
   }
 

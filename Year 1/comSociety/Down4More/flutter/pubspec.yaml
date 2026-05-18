@@ -47,7 +47,13 @@ dependencies:
   # start, on Android it uses ACTION_VIEW intents.
   url_launcher: ^6.3.1
   path: ^1.9.0
+
+  # Requests POST_NOTIFICATIONS at runtime on Android 13+ so the download
+  # foreground service can post its persistent notification.
   permission_handler: ^12.0.1
+
+  # Native folder picker used by the Settings screen on desktop platforms.
+  file_picker: ^11.0.2
 
 dev_dependencies:
   flutter_test:
