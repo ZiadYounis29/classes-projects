@@ -12,6 +12,7 @@ import com.yausername.youtubedl_android.YoutubeDL
 import com.yausername.youtubedl_android.YoutubeDLException
 import com.yausername.youtubedl_android.YoutubeDLRequest
 import com.yausername.youtubedl_android.YoutubeDLResponse
+import com.yausername.youtubedl_android.YoutubeDL.UpdateChannel
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodCall
@@ -107,6 +108,13 @@ class YtDlpPlugin :
             if (initialized) return
             YoutubeDL.getInstance().init(context)
             FFmpeg.getInstance().init(context)
+            // Update yt-dlp to the latest version so YouTube's anti-bot
+            // measures (HTTP 403) are handled by the newest extractors.
+            // Wrapped in try-catch: if the update fails (no network, etc.)
+            // we fall back to the bundled version.
+            try {
+                YoutubeDL.getInstance().updateYoutubeDL(context, UpdateChannel.STABLE)
+            } catch (_: Throwable) { /* update failed — use bundled version */ }
             initialized = true
         }
     }
