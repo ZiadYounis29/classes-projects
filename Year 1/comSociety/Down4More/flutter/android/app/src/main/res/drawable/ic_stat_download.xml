@@ -1,0 +1,19 @@
+<!--
+  Monochrome notification icon shown on the foreground-service ongoing
+  notification. Android tints non-white pixels to the system accent on
+  API 21+, so the canonical guidance is: pure white on transparent, no
+  shadows, no gradients.
+
+  Shape: a download arrow over a baseline — same silhouette as
+  Material's `file_download` symbol so it reads as "downloading" at a
+  glance even at status-bar size (~16dp).
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M19,9h-4V3H9v6H5l7,7 7,-7zM5,18v2h14v-2H5z" />
+</vector>

@@ -49,6 +49,12 @@
             android:foregroundServiceType="dataSync"
             android:exported="false" />
 
+        <!-- Receives the "Cancel" action tap from the ongoing-download
+             notification. Not exported — only our own process broadcasts to it. -->
+        <receiver
+            android:name=".DownloadActionReceiver"
+            android:exported="false" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
