@@ -29,6 +29,7 @@ import android.os.Looper
 import java.io.File
 import java.io.FileInputStream
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Flutter plugin that bridges the Dart `AndroidYtDlpBackend` to the
@@ -58,6 +59,14 @@ class YtDlpPlugin :
     private var eventSink: EventChannel.EventSink? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val downloadJobs = ConcurrentHashMap<String, Job>()
+
+    /**
+     * Number of downloads currently in flight. Drives the foreground-service
+     * lifecycle: incremented before `startDownload`, decremented in the
+     * coroutine's `finally`. When this hits zero we stop the service so
+     * Android removes the ongoing notification.
+     */
+    private val activeDownloads = AtomicInteger(0)
 
     @Volatile
     private var initialized = false
@@ -218,6 +227,13 @@ class YtDlpPlugin :
             result.error(ERR_ARG, "duplicate downloadId: $downloadId", null); return
         }
 
+        // Promote the app to the foreground BEFORE the first download starts
+        // so Android doesn't get a chance to kill us between the launch call
+        // and the coroutine actually running. Subsequent downloads just bump
+        // the active count and reuse the same service.
+        val activeAfter = activeDownloads.incrementAndGet()
+        DownloadForegroundService.start(context, activeAfter)
+
         val job = scope.launch {
             try {
                 ensureInitialized()
@@ -271,12 +287,29 @@ class YtDlpPlugin :
                 )
             } finally {
                 downloadJobs.remove(downloadId)
+                onDownloadFinished()
             }
         }
         downloadJobs[downloadId] = job
         // Acknowledge immediately so the Dart side can start listening on the
         // EventChannel before the first progress tick lands.
         result.success(null)
+    }
+
+    /**
+     * Called whenever a download coroutine exits (success, cancel, or error).
+     * Decrements [activeDownloads]; if the count reaches zero we stop the
+     * foreground service so the ongoing notification clears. If we still
+     * have other downloads in flight we re-fire `start` so the notification
+     * text reflects the new count.
+     */
+    private fun onDownloadFinished() {
+        val remaining = activeDownloads.updateAndGet { (it - 1).coerceAtLeast(0) }
+        if (remaining == 0) {
+            DownloadForegroundService.stop(context)
+        } else {
+            DownloadForegroundService.start(context, remaining)
+        }
     }
 
     private fun handleCancelDownload(call: MethodCall, result: MethodChannel.Result) {
@@ -291,6 +324,8 @@ class YtDlpPlugin :
             // already-cancelled and emit a synthetic cancelled event so the
             // Dart side's stream still terminates.
         }
+        // Cancelling the coroutine triggers its `finally` block which calls
+        // onDownloadFinished(); we don't have to bump the counter here.
         downloadJobs[downloadId]?.cancel()
         downloadJobs.remove(downloadId)
         emitOnMain(mapOf("downloadId" to downloadId, "type" to "cancelled"))
